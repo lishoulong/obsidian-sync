@@ -215,7 +215,6 @@ export class SyncEngine {
       if (!path) continue;
       if (isExcluded(path, this.data.settings.excludePatterns)) continue;
       const blobSha = requireBlob(entry);
-      await this.assertLocalUnchanged(path, initialHashes.get(path));
       const pulled = await client.pullFile(plan.sessionToken, remotePath, blobSha);
       addRequestId(diagnostics, pulled.requestId);
       const content = base64ToArrayBuffer(pulled.content);
@@ -223,7 +222,8 @@ export class SyncEngine {
       if (content.byteLength !== pulled.size || hash !== pulled.sha256) {
         throw new VaultBridgeError("download_integrity", `${path} download failed integrity checks.`);
       }
-      await this.writeFile(path, content);
+      await this.assertLocalUnchanged(path, initialHashes.get(path), { size: content.byteLength, sha256: hash });
+      await this.writeDownloadedFile(path, content);
       count += 1;
     }
     return count;
@@ -255,45 +255,58 @@ export class SyncEngine {
       const pulled = await client.pullFile(plan.sessionToken, remotePath, entry.remoteBlobSha);
       const content = base64ToArrayBuffer(pulled.content);
       const conflictPath = await this.nextConflictPath(path);
-      await this.writeFile(conflictPath, content);
+      await this.createNewFile(conflictPath, content);
       paths.push(conflictPath);
     }
     return paths;
   }
 
-  private async assertLocalUnchanged(path: string, initial: FileMeta | undefined): Promise<void> {
-    const file = this.vault.getFileByPath(path);
-    if (!file) {
+  private async assertLocalUnchanged(path: string, initial: FileMeta | undefined, downloaded?: FileMeta): Promise<void> {
+    const current = await this.readPathMeta(path);
+    if (!current) {
       if (initial) throw new VaultBridgeError("local_changed", `${path} changed during sync.`);
       return;
     }
-    const current = await readFileMeta(this.vault, file);
     if (initial && !sameMeta(current, initial)) throw new VaultBridgeError("local_changed", `${path} changed during sync.`);
+    if (!initial && downloaded && sameMeta(current, downloaded)) return;
     if (!initial) throw new VaultBridgeError("local_changed", `${path} appeared during sync.`);
   }
 
-  private async writeFile(path: string, content: ArrayBuffer): Promise<void> {
+  private async writeDownloadedFile(path: string, content: ArrayBuffer): Promise<void> {
     await this.ensureParentFolders(path);
     const file = this.vault.getFileByPath(path);
     if (file) {
-      await this.vault.modifyBinary(file, content);
+      try {
+        await this.vault.modifyBinary(file, content);
+      } catch {
+        await this.writeBinaryViaAdapter(path, content);
+      }
       return;
     }
 
+    await this.writeBinaryViaAdapter(path, content);
+  }
+
+  private async createNewFile(path: string, content: ArrayBuffer): Promise<void> {
+    await this.ensureParentFolders(path);
+    if (await this.pathExists(path)) {
+      throw new VaultBridgeError("file_exists", `${path} already exists.`);
+    }
+
     try {
-      await this.vault.createBinary(path, content);
+      await this.vault.adapter.writeBinary(path, content);
+      await this.vault.adapter.stat(path);
     } catch (error) {
-      const existing = this.vault.getFileByPath(path);
-      if (existing) {
-        await this.vault.modifyBinary(existing, content);
-        return;
-      }
-      if (await this.vault.adapter.exists(path)) {
-        await this.vault.adapter.writeBinary(path, content);
-        await this.vault.adapter.stat(path);
-        return;
-      }
-      throw error;
+      throw wrapFileOperationError("create_file", path, error);
+    }
+  }
+
+  private async writeBinaryViaAdapter(path: string, content: ArrayBuffer): Promise<void> {
+    try {
+      await this.vault.adapter.writeBinary(path, content);
+      await this.vault.adapter.stat(path);
+    } catch (error) {
+      throw wrapFileOperationError("write_file", path, error);
     }
   }
 
@@ -305,9 +318,9 @@ export class SyncEngine {
       current = current ? `${current}/${part}` : part;
       if (await this.folderExists(current)) continue;
       try {
-        await this.vault.createFolder(current);
+        await this.vault.adapter.mkdir(current);
       } catch (error) {
-        if (!(await this.folderExists(current))) throw error;
+        if (!(await this.folderExistsWithRetry(current))) throw wrapFileOperationError("create_folder", current, error);
       }
     }
   }
@@ -322,6 +335,31 @@ export class SyncEngine {
     throw new VaultBridgeError("parent_not_folder", `${path} exists but is not a folder.`);
   }
 
+  private async folderExistsWithRetry(path: string): Promise<boolean> {
+    for (const delay of [0, 50, 150, 300]) {
+      if (delay > 0) await sleep(delay);
+      if (await this.folderExists(path)) return true;
+    }
+    return false;
+  }
+
+  private async pathExists(path: string): Promise<boolean> {
+    if (this.vault.getAbstractFileByPath(path)) return true;
+    return (await this.vault.adapter.stat(path)) !== null;
+  }
+
+  private async readPathMeta(path: string): Promise<FileMeta | null> {
+    const file = this.vault.getFileByPath(path);
+    if (file) return await readFileMeta(this.vault, file);
+
+    const stat = await this.vault.adapter.stat(path);
+    if (!stat) return null;
+    if (stat.type !== "file") throw new VaultBridgeError("path_not_file", `${path} exists but is not a file.`);
+
+    const bytes = await this.vault.adapter.readBinary(path);
+    return { size: bytes.byteLength, sha256: await sha256Hex(bytes) };
+  }
+
   private async nextConflictPath(path: string): Promise<string> {
     const timestamp = formatTimestamp(new Date());
     const slash = path.lastIndexOf("/");
@@ -334,7 +372,7 @@ export class SyncEngine {
     for (let index = 0; index < 1000; index++) {
       const suffix = index === 0 ? "" : `-${index}`;
       const candidate = `${folder}${base}.remote-conflict-${timestamp}${suffix}${extension}`;
-      if (!this.vault.getAbstractFileByPath(candidate)) return candidate;
+      if (!(await this.pathExists(candidate))) return candidate;
     }
     throw new VaultBridgeError("conflict_name_collision", `Unable to create a conflict filename for ${path}.`);
   }
@@ -382,6 +420,15 @@ function addRequestId(diagnostics: SyncDiagnostics, requestId: string | undefine
   if (!requestId) return;
   diagnostics.requestIds = diagnostics.requestIds || [];
   if (!diagnostics.requestIds.includes(requestId)) diagnostics.requestIds.push(requestId);
+}
+
+function wrapFileOperationError(operation: string, path: string, error: unknown): VaultBridgeError {
+  const message = error instanceof Error ? error.message : String(error);
+  return new VaultBridgeError(operation, `${operation} failed for ${path}: ${message}`);
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export function showResultNotice(result: SyncResult): void {
