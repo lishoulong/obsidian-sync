@@ -30,6 +30,10 @@ export class WorkerClient {
     return this.request("GET", "/health", null, false);
   }
 
+  async setupCheck(): Promise<{ ok: boolean; repository?: { fullName?: string; branch?: string; headCommitSha?: string } }> {
+    return this.request("GET", "/v2/setup/check", null, true);
+  }
+
   async syncCheck(deviceId: string, lastSyncedCommitSha: string | null, files: FileManifest): Promise<SyncPlan> {
     return this.request("POST", "/v2/sync/check", { deviceId, lastSyncedCommitSha, files }, true);
   }

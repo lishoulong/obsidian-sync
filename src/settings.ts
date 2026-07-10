@@ -15,7 +15,7 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
 ];
 
 export const DEFAULT_SETTINGS: VaultBridgeSettings = {
-  workerUrl: "https://vaultbridge.open-proxy.workers.dev",
+  workerUrl: "",
   syncToken: "",
   deviceId: "",
   localPrefix: "",

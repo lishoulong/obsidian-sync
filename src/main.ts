@@ -84,7 +84,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     if (!health.ok || health.service !== "vaultbridge" || health.protocol !== 2) {
       throw new Error("Worker is reachable but does not report VaultBridge Protocol v2.");
     }
-    await client.syncCheck(this.data.settings.deviceId, null, {});
+    await client.setupCheck();
   }
 
   async syncNow(): Promise<void> {

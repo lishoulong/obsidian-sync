@@ -53,11 +53,15 @@ The plugin is designed with `isDesktopOnly: false` and avoids native Git, Node f
 
 The plugin requires:
 
-- Worker URL, for example `https://vaultbridge.open-proxy.workers.dev`
+- Worker URL, for example `https://vaultbridge.example.workers.dev`
 - `SYNC_TOKEN` configured on the Worker
 - Stable device ID, for example `fred-iphone`
 
 The plugin stores compact device state in Obsidian plugin data, not in the synced vault.
+
+`Test connection` checks the Worker health, authenticates with `SYNC_TOKEN`, and verifies that the self-hosted Worker can access its configured GitHub repository and branch.
+
+For self-hosted use, deploy the VaultBridge Worker against your own GitHub repository, then copy the Worker URL and `SYNC_TOKEN` into this plugin. The plugin never stores a GitHub token.
 
 ## Desktop Git autosync
 
