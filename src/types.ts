@@ -22,6 +22,16 @@ export interface VaultBridgePluginData {
   settings: VaultBridgeSettings;
   deviceState: DeviceState | null;
   lastResult: SyncResult | null;
+  pendingConflicts?: Record<string, PendingConflict>;
+}
+
+export interface PendingConflict {
+  path: string;
+  localPath: string;
+  remoteCommitSha: string;
+  remoteBlobSha?: string;
+  conflictPaths: string[];
+  createdAt: string;
 }
 
 export interface FileMeta {

@@ -65,4 +65,4 @@ On Obsidian desktop, the plugin can commit and push local vault changes with the
 
 If Git reports a rebase, merge, or push conflict, the plugin stops and leaves the Git working tree for manual resolution. It does not auto-merge conflicts.
 
-On mobile, conflicts reported by the Worker are handled separately: the plugin keeps the local file unchanged, writes the remote version as a sibling `.remote-conflict-...` file, and stops before pushing.
+On mobile, conflicts reported by the Worker are handled separately: the plugin keeps the local file unchanged, writes the remote version as a sibling `.remote-conflict-...` file, and stops before pushing. After you merge the content and delete the conflict copy, the next sync treats the local file as the resolved version and pushes it instead of recreating the same conflict copy.

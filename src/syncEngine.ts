@@ -3,13 +3,14 @@ import { base64ToArrayBuffer } from "./encoding";
 import { makeDeviceState, validateRequiredSettings } from "./settings";
 import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaultScanner";
 import { isExcluded } from "./vaultScanner";
-import { localManifestToRemote, localToRemotePath, remoteToLocalPath } from "./pathMapping";
+import { localManifestToRemote, remoteToLocalPath } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
 import {
   BlobEntry,
   DeviceState,
   FileManifest,
   FileMeta,
+  PendingConflict,
   SyncDiagnostics,
   SyncPlan,
   SyncPlanEntry,
@@ -49,7 +50,7 @@ export class SyncEngine {
     const initialRemoteManifest = localManifestToRemote(initialScan.manifest, this.data.settings);
     const deviceId = this.data.settings.deviceId;
     const baseSha = stateCommitSha(this.data.deviceState);
-    const pushBaseSha = baseSha || undefined;
+    this.data.pendingConflicts = this.data.pendingConflicts || {};
 
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
@@ -71,17 +72,19 @@ export class SyncEngine {
     let conflictCopies: string[] = [];
 
     try {
-    if (pullPlan.conflict.length > 0) {
+    const pullConflictState = await this.splitResolvedConflicts(pullPlan);
+    if (pullConflictState.unresolved.length > 0) {
       diagnostics.phase = "conflict_pull";
-      conflictCopies = await this.writeConflictCopies(client, pullPlan);
+      conflictCopies = await this.writeConflictCopies(client, pullPlan, pullConflictState.unresolved);
       return await this.finish({
         status: "conflict",
-        message: `${pullPlan.conflict.length} conflict(s) found. Review conflict copies before syncing again.`,
-        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pullPlan.conflict.length, unchanged: pullPlan.unchanged.length },
+        message: `${pullConflictState.unresolved.length} conflict(s) found. Review conflict copies before syncing again.`,
+        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pullConflictState.unresolved.length, unchanged: pullPlan.unchanged.length },
         conflictPaths: conflictCopies,
         diagnostics
       }, false);
     }
+    const resolvedConflicts = [...pullConflictState.resolved];
 
     diagnostics.phase = "download";
     downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes, diagnostics);
@@ -93,19 +96,39 @@ export class SyncEngine {
     const postPullScan = await scanVault(this.vault, this.data.settings);
     const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     diagnostics.phase = "push_plan";
-    const pushPlan = await client.syncCheck(deviceId, pushBaseSha || pullPlan.remoteCommitSha, postPullRemoteManifest);
+    let pushPlanBaseSha = resolvedConflicts.length > 0 ? pullPlan.remoteCommitSha : (baseSha || pullPlan.remoteCommitSha);
+    let pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
     diagnostics.pushCounts = pushPlan.counts;
     addRequestId(diagnostics, pushPlan.requestId);
     diagnostics.uploadPaths = previewPaths(pushPlan.upload);
     diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
 
     if (pushPlan.conflict.length > 0) {
+      const pushConflictState = await this.splitResolvedConflicts(pushPlan);
+      resolvedConflicts.push(...pushConflictState.resolved);
+      if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
+        diagnostics.phase = "push_plan_after_resolved_conflicts";
+        pushPlanBaseSha = pushPlan.remoteCommitSha;
+        pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
+        diagnostics.pushCounts = pushPlan.counts;
+        addRequestId(diagnostics, pushPlan.requestId);
+        diagnostics.uploadPaths = previewPaths(pushPlan.upload);
+        diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
+      }
+    }
+
+    if (pushPlan.conflict.length > 0) {
+      const pushConflictState = await this.splitResolvedConflicts(pushPlan);
+      if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
+        diagnostics.phase = "plan_not_clean";
+        throw new VaultBridgeError("plan_not_clean", "Resolved conflicts still appear after re-planning. Run sync again.");
+      }
       diagnostics.phase = "conflict_after_pull";
-      conflictCopies = await this.writeConflictCopies(client, pushPlan);
+      conflictCopies = await this.writeConflictCopies(client, pushPlan, pushConflictState.unresolved);
       return await this.finish({
         status: "conflict",
-        message: `${pushPlan.conflict.length} conflict(s) found after pull. Review conflict copies before syncing again.`,
-        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pushPlan.conflict.length, unchanged: pushPlan.unchanged.length },
+        message: `${pushConflictState.unresolved.length} conflict(s) found after pull. Review conflict copies before syncing again.`,
+        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pushConflictState.unresolved.length, unchanged: pushPlan.unchanged.length },
         conflictPaths: conflictCopies,
         diagnostics
       }, false);
@@ -120,8 +143,9 @@ export class SyncEngine {
       diagnostics.phase = "already_in_sync";
       if (pushPlan.nextDeviceState) {
         this.data.deviceState = pushPlan.nextDeviceState;
-        await this.saveData(this.data);
       }
+      this.clearPendingConflicts();
+      await this.saveData(this.data);
       return await this.finish({
         status: "success",
         message: "Vault is already in sync.",
@@ -172,6 +196,7 @@ export class SyncEngine {
     addRequestId(diagnostics, commit.requestId);
     diagnostics.phase = "complete";
     this.data.deviceState = commit.deviceState;
+    this.clearPendingConflicts();
     await this.saveData(this.data);
 
     return await this.finish({
@@ -257,20 +282,79 @@ export class SyncEngine {
     return count;
   }
 
-  private async writeConflictCopies(client: WorkerClient, plan: SyncPlan): Promise<string[]> {
+  private async writeConflictCopies(client: WorkerClient, plan: SyncPlan, conflicts: SyncPlanEntry[] = plan.conflict): Promise<string[]> {
     const paths: string[] = [];
-    for (const entry of plan.conflict) {
+    this.data.pendingConflicts = this.data.pendingConflicts || {};
+    for (const entry of conflicts) {
       if (!entry.remoteBlobSha) continue;
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
+      const existing = this.data.pendingConflicts[remotePath];
+      if (existing && this.samePendingConflict(existing, plan, entry)) {
+        const existingPaths = await this.existingConflictPaths(existing);
+        if (existingPaths.length > 0) {
+          paths.push(...existingPaths);
+          continue;
+        }
+      }
       const pulled = await client.pullFile(plan.sessionToken, remotePath, entry.remoteBlobSha);
       const content = base64ToArrayBuffer(pulled.content);
       const conflictPath = await this.nextConflictPath(path);
       await this.createNewFile(conflictPath, content);
+      this.data.pendingConflicts[remotePath] = {
+        path: remotePath,
+        localPath: path,
+        remoteCommitSha: plan.remoteCommitSha,
+        remoteBlobSha: entry.remoteBlobSha,
+        conflictPaths: [conflictPath],
+        createdAt: new Date().toISOString()
+      };
       paths.push(conflictPath);
     }
     return paths;
+  }
+
+  private async splitResolvedConflicts(plan: SyncPlan): Promise<{ resolved: SyncPlanEntry[]; unresolved: SyncPlanEntry[] }> {
+    const resolved: SyncPlanEntry[] = [];
+    const unresolved: SyncPlanEntry[] = [];
+    const pending = this.data.pendingConflicts || {};
+
+    for (const entry of plan.conflict) {
+      const remotePath = requirePath(entry);
+      const current = pending[remotePath];
+      if (!current || !this.samePendingConflict(current, plan, entry)) {
+        unresolved.push(entry);
+        continue;
+      }
+
+      const existingPaths = await this.existingConflictPaths(current);
+      if (existingPaths.length > 0) {
+        unresolved.push(entry);
+        continue;
+      }
+
+      resolved.push(entry);
+    }
+
+    return { resolved, unresolved };
+  }
+
+  private samePendingConflict(pending: PendingConflict, plan: SyncPlan, entry: SyncPlanEntry): boolean {
+    return pending.remoteCommitSha === plan.remoteCommitSha
+      && pending.remoteBlobSha === entry.remoteBlobSha;
+  }
+
+  private async existingConflictPaths(pending: PendingConflict): Promise<string[]> {
+    const existing: string[] = [];
+    for (const path of pending.conflictPaths) {
+      if (await this.pathExists(path)) existing.push(path);
+    }
+    return existing;
+  }
+
+  private clearPendingConflicts(): void {
+    this.data.pendingConflicts = {};
   }
 
   private async assertLocalUnchanged(path: string, initial: FileMeta | undefined, downloaded?: FileMeta): Promise<void> {

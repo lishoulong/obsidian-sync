@@ -32,7 +32,8 @@ export function createDefaultData(): VaultBridgePluginData {
   return {
     settings: { ...DEFAULT_SETTINGS, excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS] },
     deviceState: null,
-    lastResult: null
+    lastResult: null,
+    pendingConflicts: {}
   };
 }
 
@@ -253,6 +254,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
         .setButtonText("Reset")
         .onClick(async () => {
           this.plugin.data.deviceState = { version: 2, deviceId: settings.deviceId, lastSyncedCommitSha: null };
+          this.plugin.data.pendingConflicts = {};
           await this.plugin.savePluginData();
           new Notice("VaultBridge device state reset.");
         }));

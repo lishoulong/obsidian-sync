@@ -58,7 +58,8 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     this.data = {
       settings,
       deviceState: loaded?.deviceState || null,
-      lastResult: loaded?.lastResult || null
+      lastResult: loaded?.lastResult || null,
+      pendingConflicts: loaded?.pendingConflicts || {}
     };
     this.data.deviceState = makeDeviceState(this.data.settings, this.data.deviceState);
   }
