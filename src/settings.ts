@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   workerUrl: "https://vaultbridge.open-proxy.workers.dev",
   syncToken: "",
   deviceId: "",
+  localPrefix: "",
   remotePrefix: "vault/",
   maxFileBytes: DEFAULT_MAX_FILE_BYTES,
   excludePatterns: DEFAULT_EXCLUDE_PATTERNS
@@ -44,6 +45,10 @@ export function normalizeWorkerUrl(value: string): string {
 export function normalizeRemotePrefix(value: string): string {
   const trimmed = value.trim().replace(/^\/+/, "").replace(/\\/g, "/").replace(/\/+$/, "");
   return trimmed ? `${trimmed}/` : "";
+}
+
+export function normalizeLocalPrefix(value: string): string {
+  return normalizeRemotePrefix(value);
 }
 
 export function validateRequiredSettings(settings: VaultBridgeSettings): void {
@@ -141,6 +146,17 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
         .setValue(settings.remotePrefix)
         .onChange(async (value) => {
           settings.remotePrefix = normalizeRemotePrefix(value);
+          await this.plugin.savePluginData();
+        }));
+
+    new Setting(containerEl)
+      .setName("Local path prefix")
+      .setDesc("Local folder inside the currently opened vault that contains notes. Use vault/ when desktop Obsidian opens the Git repository root.")
+      .addText((text) => text
+        .setPlaceholder("vault/")
+        .setValue(settings.localPrefix)
+        .onChange(async (value) => {
+          settings.localPrefix = normalizeLocalPrefix(value);
           await this.plugin.savePluginData();
         }));
 

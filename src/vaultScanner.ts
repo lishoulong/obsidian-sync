@@ -1,11 +1,18 @@
 import { normalizePath, TFile, Vault } from "obsidian";
 import { FileManifest, FileMeta, VaultBridgeError, VaultBridgeSettings } from "./types";
+import { normalizeLocalPrefix } from "./settings";
 
 export interface ScanResult {
   manifest: FileManifest;
   files: Map<string, TFile>;
   hashes: Map<string, FileMeta>;
   skipped: string[];
+}
+
+function isWithinLocalPrefix(localPath: string, settings: VaultBridgeSettings): boolean {
+  const localPrefix = normalizeLocalPrefix(settings.localPrefix);
+  if (!localPrefix) return true;
+  return cleanVaultPath(localPath).startsWith(localPrefix);
 }
 
 export async function scanVault(vault: Vault, settings: VaultBridgeSettings): Promise<ScanResult> {
@@ -16,6 +23,10 @@ export async function scanVault(vault: Vault, settings: VaultBridgeSettings): Pr
 
   for (const file of vault.getFiles()) {
     const path = cleanVaultPath(file.path);
+    if (!isWithinLocalPrefix(path, settings)) {
+      skipped.push(path);
+      continue;
+    }
     if (isExcluded(path, settings.excludePatterns)) {
       skipped.push(path);
       continue;

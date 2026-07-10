@@ -47,6 +47,7 @@ export class SyncEngine {
     const initialRemoteManifest = localManifestToRemote(initialScan.manifest, this.data.settings);
     const deviceId = this.data.settings.deviceId;
     const baseSha = stateCommitSha(this.data.deviceState);
+    const bootstrapping = baseSha === null;
 
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
@@ -68,6 +69,20 @@ export class SyncEngine {
 
     downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes);
     deletedLocal += await this.applyLocalDeletes(pullPlan, initialScan.hashes);
+
+    if (bootstrapping) {
+      this.data.deviceState = { version: 2, deviceId, lastSyncedCommitSha: pullPlan.remoteCommitSha };
+      await this.saveData(this.data);
+      return await this.finish({
+        status: "success",
+        message: pullPlan.upload.length > 0 || pullPlan.deleteRemote.length > 0
+          ? "Bootstrap pull complete. Local-only files were not uploaded; run sync again to push local changes."
+          : "Bootstrap pull complete.",
+        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
+        commitSha: pullPlan.remoteCommitSha,
+        conflictPaths: []
+      }, true);
+    }
 
     this.updateStatus("Re-scanning after pull...");
     const postPullScan = await scanVault(this.vault, this.data.settings);

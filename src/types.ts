@@ -8,6 +8,7 @@ export interface VaultBridgeSettings {
   workerUrl: string;
   syncToken: string;
   deviceId: string;
+  localPrefix: string;
   remotePrefix: string;
   maxFileBytes: number;
   excludePatterns: string[];
