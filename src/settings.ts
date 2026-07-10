@@ -33,7 +33,8 @@ export function createDefaultData(): VaultBridgePluginData {
     settings: { ...DEFAULT_SETTINGS, excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS] },
     deviceState: null,
     lastResult: null,
-    pendingConflicts: {}
+    pendingConflicts: {},
+    pendingDesktopGitConflict: null
   };
 }
 
@@ -244,6 +245,18 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             settings.desktopGitCommitMessagePrefix = value;
             await this.plugin.savePluginData();
           }));
+
+      const pendingGitConflict = this.plugin.data.pendingDesktopGitConflict;
+      if (pendingGitConflict?.active) {
+        new Setting(containerEl)
+          .setName("Desktop Git conflict")
+          .setDesc(`${pendingGitConflict.message} Auto Git push is paused until this is resolved.`)
+          .addButton((button) => button
+            .setButtonText("Continue")
+            .onClick(() => {
+              void this.plugin.continueDesktopGitConflict();
+            }));
+      }
     }
 
     new Setting(containerEl)

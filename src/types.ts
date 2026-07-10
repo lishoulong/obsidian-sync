@@ -23,6 +23,7 @@ export interface VaultBridgePluginData {
   deviceState: DeviceState | null;
   lastResult: SyncResult | null;
   pendingConflicts?: Record<string, PendingConflict>;
+  pendingDesktopGitConflict?: DesktopGitConflictState | null;
 }
 
 export interface PendingConflict {
@@ -32,6 +33,15 @@ export interface PendingConflict {
   remoteBlobSha?: string;
   conflictPaths: string[];
   createdAt: string;
+}
+
+export interface DesktopGitConflictState {
+  active: boolean;
+  kind: "rebase" | "merge" | "cherry-pick" | "unmerged" | "unknown";
+  repoRoot: string;
+  paths: string[];
+  message: string;
+  updatedAt: string;
 }
 
 export interface FileMeta {

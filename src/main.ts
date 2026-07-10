@@ -3,7 +3,7 @@ import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceS
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
-import { desktopGitCommitPush } from "./desktopGit";
+import { continueDesktopGitConflict, desktopGitCommitPush, DesktopGitConflictError } from "./desktopGit";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
@@ -44,6 +44,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "desktop-git-continue-conflict",
+      name: "Continue desktop Git conflict",
+      callback: () => {
+        void this.continueDesktopGitConflict();
+      }
+    });
+
     this.addSettingTab(new VaultBridgeSettingTab(this.app, this));
     this.registerDesktopAutoGitPushEvents();
   }
@@ -59,7 +67,8 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       settings,
       deviceState: loaded?.deviceState || null,
       lastResult: loaded?.lastResult || null,
-      pendingConflicts: loaded?.pendingConflicts || {}
+      pendingConflicts: loaded?.pendingConflicts || {},
+      pendingDesktopGitConflict: loaded?.pendingDesktopGitConflict || null
     };
     this.data.deviceState = makeDeviceState(this.data.settings, this.data.deviceState);
   }
@@ -138,8 +147,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     new Notice("VaultBridge Git push started.");
     try {
       const result = await desktopGitCommitPush(this.app, this.data.settings);
+      this.data.pendingDesktopGitConflict = null;
+      await this.savePluginData();
       new Notice(result.message, result.commitSha ? 6000 : 4000);
     } catch (error) {
+      if (error instanceof DesktopGitConflictError) {
+        this.data.pendingDesktopGitConflict = error.conflict;
+        await this.savePluginData();
+      }
       new Notice(formatError(error), 12000);
     } finally {
       this.gitPushing = false;
@@ -148,6 +163,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
 
   scheduleDesktopAutoGitPush(): void {
     if (!Platform.isDesktopApp || !this.data.settings.desktopAutoGitPush) return;
+    if (this.data.pendingDesktopGitConflict?.active) return;
     if (this.autoGitPushTimer !== null) window.clearTimeout(this.autoGitPushTimer);
     const delay = Math.max(5, this.data.settings.desktopAutoGitPushDelaySeconds) * 1000;
     this.autoGitPushTimer = window.setTimeout(() => {
@@ -165,13 +181,43 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   }
 
   private async desktopAutoGitPush(): Promise<void> {
-    if (this.gitPushing || !this.data.settings.desktopAutoGitPush) return;
+    if (this.gitPushing || !this.data.settings.desktopAutoGitPush || this.data.pendingDesktopGitConflict?.active) return;
     this.gitPushing = true;
     try {
       const result = await desktopGitCommitPush(this.app, this.data.settings, true);
+      this.data.pendingDesktopGitConflict = null;
+      await this.savePluginData();
       if (result.commitSha) new Notice(result.message, 5000);
     } catch (error) {
+      if (error instanceof DesktopGitConflictError) {
+        this.data.pendingDesktopGitConflict = error.conflict;
+        await this.savePluginData();
+      }
       new Notice(`VaultBridge auto Git push stopped: ${formatError(error)}`, 12000);
+    } finally {
+      this.gitPushing = false;
+    }
+  }
+
+  async continueDesktopGitConflict(): Promise<void> {
+    if (this.gitPushing) {
+      new Notice("VaultBridge Git push is already running.");
+      return;
+    }
+
+    this.gitPushing = true;
+    new Notice("VaultBridge continuing Git conflict...");
+    try {
+      const result = await continueDesktopGitConflict(this.app, this.data.settings);
+      this.data.pendingDesktopGitConflict = null;
+      await this.savePluginData();
+      new Notice(result.message, 6000);
+    } catch (error) {
+      if (error instanceof DesktopGitConflictError) {
+        this.data.pendingDesktopGitConflict = error.conflict;
+        await this.savePluginData();
+      }
+      new Notice(formatError(error), 12000);
     } finally {
       this.gitPushing = false;
     }
@@ -179,6 +225,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
 }
 
 function formatError(error: unknown): string {
+  if (error instanceof DesktopGitConflictError) return error.conflict.message;
   if (error instanceof VaultBridgeError) return `${error.message} (${error.code})`;
   if (error instanceof Error) return error.message.replace(/Bearer\s+\S+/g, "Bearer [redacted]");
   return "VaultBridge sync failed.";
