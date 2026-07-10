@@ -1,5 +1,5 @@
 import { Notice, Plugin } from "obsidian";
-import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceState, VaultBridgeSettingTab, validateRequiredSettings } from "./settings";
+import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceState, normalizeRemotePrefix, VaultBridgeSettingTab, validateRequiredSettings } from "./settings";
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
@@ -40,6 +40,9 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     const loaded = await this.loadData() as Partial<VaultBridgePluginData> | null;
     const settings = { ...DEFAULT_SETTINGS, ...(loaded?.settings || {}) };
     if (!settings.deviceId) settings.deviceId = createInitialDeviceId(this.app);
+    if (!settings.localPrefix && normalizeRemotePrefix(settings.remotePrefix) === "vault/" && this.app.vault.getFolderByPath("vault")) {
+      settings.localPrefix = "vault/";
+    }
     this.data = {
       settings,
       deviceState: loaded?.deviceState || null,

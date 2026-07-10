@@ -54,6 +54,15 @@ export class SyncEngine {
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
     const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
     new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
+    if (this.looksLikePathMappingMismatch(pullPlan, initialScan)) {
+      return await this.finish({
+        status: "error",
+        message: "Path mapping mismatch: set Local path prefix to vault/ when Obsidian opens the repository root.",
+        counts: { downloaded: 0, uploaded: 0, deletedLocal: 0, deletedRemote: 0, conflicts: pullPlan.counts.conflict, unchanged: pullPlan.counts.unchanged },
+        conflictPaths: [],
+        diagnostics
+      }, false);
+    }
     let downloaded = 0;
     let deletedLocal = 0;
     let uploaded = 0;
@@ -189,6 +198,13 @@ export class SyncEngine {
     };
     addRequestId(diagnostics, plan.requestId);
     return diagnostics;
+  }
+
+  private looksLikePathMappingMismatch(plan: SyncPlan, scan: ScanResult): boolean {
+    const localPrefix = this.data.settings.localPrefix.trim();
+    const remotePrefix = this.data.settings.remotePrefix.trim();
+    if (localPrefix || !remotePrefix || Object.keys(scan.manifest).length < 100) return false;
+    return plan.counts.download > 100 && plan.counts.upload > 100 && plan.counts.unchanged === 0 && plan.counts.conflict === 0;
   }
 
   private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>, diagnostics: SyncDiagnostics): Promise<number> {
