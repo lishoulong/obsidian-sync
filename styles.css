@@ -1,0 +1,8 @@
+.vaultbridge-sync-status {
+  font-size: var(--font-ui-small);
+}
+
+.vaultbridge-sync-summary {
+  margin-top: 0.75rem;
+  color: var(--text-muted);
+}

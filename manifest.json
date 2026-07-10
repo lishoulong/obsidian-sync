@@ -1,0 +1,10 @@
+{
+  "id": "vaultbridge-sync",
+  "name": "VaultBridge Sync",
+  "version": "0.1.3",
+  "minAppVersion": "1.5.0",
+  "description": "Sync the current vault through VaultBridge Worker Protocol v2.",
+  "author": "lishoulong",
+  "authorUrl": "https://github.com/lishoulong",
+  "isDesktopOnly": false
+}
