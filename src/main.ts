@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Platform, Plugin } from "obsidian";
 import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceState, normalizeRemotePrefix, VaultBridgeSettingTab, validateRequiredSettings } from "./settings";
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { VaultBridgeError, VaultBridgePluginData } from "./types";
@@ -9,6 +9,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
   private syncing = false;
   private gitPushing = false;
+  private autoGitPushTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -44,6 +45,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     });
 
     this.addSettingTab(new VaultBridgeSettingTab(this.app, this));
+    this.registerDesktopAutoGitPushEvents();
   }
 
   async loadPluginData(): Promise<void> {
@@ -138,6 +140,37 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       new Notice(result.message, result.commitSha ? 6000 : 4000);
     } catch (error) {
       new Notice(formatError(error), 12000);
+    } finally {
+      this.gitPushing = false;
+    }
+  }
+
+  scheduleDesktopAutoGitPush(): void {
+    if (!Platform.isDesktopApp || !this.data.settings.desktopAutoGitPush) return;
+    if (this.autoGitPushTimer !== null) window.clearTimeout(this.autoGitPushTimer);
+    const delay = Math.max(5, this.data.settings.desktopAutoGitPushDelaySeconds) * 1000;
+    this.autoGitPushTimer = window.setTimeout(() => {
+      this.autoGitPushTimer = null;
+      void this.desktopAutoGitPush();
+    }, delay);
+  }
+
+  private registerDesktopAutoGitPushEvents(): void {
+    if (!Platform.isDesktopApp) return;
+    this.registerEvent(this.app.vault.on("create", () => this.scheduleDesktopAutoGitPush()));
+    this.registerEvent(this.app.vault.on("modify", () => this.scheduleDesktopAutoGitPush()));
+    this.registerEvent(this.app.vault.on("delete", () => this.scheduleDesktopAutoGitPush()));
+    this.registerEvent(this.app.vault.on("rename", () => this.scheduleDesktopAutoGitPush()));
+  }
+
+  private async desktopAutoGitPush(): Promise<void> {
+    if (this.gitPushing || !this.data.settings.desktopAutoGitPush) return;
+    this.gitPushing = true;
+    try {
+      const result = await desktopGitCommitPush(this.app, this.data.settings, true);
+      if (result.commitSha) new Notice(result.message, 5000);
+    } catch (error) {
+      new Notice(`VaultBridge auto Git push stopped: ${formatError(error)}`, 12000);
     } finally {
       this.gitPushing = false;
     }

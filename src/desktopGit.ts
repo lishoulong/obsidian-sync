@@ -16,7 +16,7 @@ export interface DesktopGitResult {
   message: string;
 }
 
-export async function desktopGitCommitPush(app: App, settings: VaultBridgeSettings): Promise<DesktopGitResult> {
+export async function desktopGitCommitPush(app: App, settings: VaultBridgeSettings, automatic = false): Promise<DesktopGitResult> {
   if (!Platform.isDesktopApp) {
     throw new Error("Desktop Git push is only available in the Obsidian desktop app.");
   }
@@ -25,15 +25,20 @@ export async function desktopGitCommitPush(app: App, settings: VaultBridgeSettin
   const repoRoot = (await git(["rev-parse", "--show-toplevel"], vaultPath)).stdout.trim();
   const pathspec = normalizeLocalPrefix(settings.localPrefix) || ".";
 
+  if (settings.desktopGitPullBeforePush) {
+    await git(["pull", "--rebase", "--autostash"], repoRoot);
+  }
+
   await git(["add", "-A", "--", pathspec], repoRoot);
   const staged = (await git(["status", "--porcelain"], repoRoot)).stdout.trim();
   if (!staged) return { commitSha: null, message: "No Git changes to push." };
 
-  const message = `VaultBridge desktop sync ${new Date().toISOString()}`;
+  const prefix = settings.desktopGitCommitMessagePrefix.trim() || "VaultBridge desktop autosync";
+  const message = `${prefix} ${new Date().toISOString()}`;
   await git(["commit", "-m", message], repoRoot);
   await git(["push"], repoRoot);
   const commitSha = (await git(["rev-parse", "HEAD"], repoRoot)).stdout.trim();
-  return { commitSha, message: `Git push complete at ${commitSha.slice(0, 12)}.` };
+  return { commitSha, message: `${automatic ? "Auto Git push" : "Git push"} complete at ${commitSha.slice(0, 12)}.` };
 }
 
 function getVaultBasePath(app: App): string {

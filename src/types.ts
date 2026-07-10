@@ -12,6 +12,10 @@ export interface VaultBridgeSettings {
   remotePrefix: string;
   maxFileBytes: number;
   excludePatterns: string[];
+  desktopAutoGitPush: boolean;
+  desktopAutoGitPushDelaySeconds: number;
+  desktopGitPullBeforePush: boolean;
+  desktopGitCommitMessagePrefix: string;
 }
 
 export interface VaultBridgePluginData {

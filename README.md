@@ -58,3 +58,11 @@ The plugin requires:
 - Stable device ID, for example `fred-iphone`
 
 The plugin stores compact device state in Obsidian plugin data, not in the synced vault.
+
+## Desktop Git autosync
+
+On Obsidian desktop, the plugin can commit and push local vault changes with the local `git` command. Automatic Git push is disabled by default. When enabled, vault file changes are debounced and pushed after the configured idle delay. Before pushing, the plugin can run `git pull --rebase --autostash`.
+
+If Git reports a rebase, merge, or push conflict, the plugin stops and leaves the Git working tree for manual resolution. It does not auto-merge conflicts.
+
+On mobile, conflicts reported by the Worker are handled separately: the plugin keeps the local file unchanged, writes the remote version as a sibling `.remote-conflict-...` file, and stops before pushing.

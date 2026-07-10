@@ -21,7 +21,11 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   localPrefix: "",
   remotePrefix: "vault/",
   maxFileBytes: DEFAULT_MAX_FILE_BYTES,
-  excludePatterns: DEFAULT_EXCLUDE_PATTERNS
+  excludePatterns: DEFAULT_EXCLUDE_PATTERNS,
+  desktopAutoGitPush: false,
+  desktopAutoGitPushDelaySeconds: 60,
+  desktopGitPullBeforePush: true,
+  desktopGitCommitMessagePrefix: "VaultBridge desktop autosync"
 };
 
 export function createDefaultData(): VaultBridgePluginData {
@@ -192,6 +196,52 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           .setButtonText("Git push")
           .onClick(() => {
             void this.plugin.desktopGitCommitPush();
+          }));
+
+      new Setting(containerEl)
+        .setName("Automatic desktop Git push")
+        .setDesc("Automatically commits and pushes desktop vault changes after the vault has been idle.")
+        .addToggle((toggle) => toggle
+          .setValue(settings.desktopAutoGitPush)
+          .onChange(async (value) => {
+            settings.desktopAutoGitPush = value;
+            await this.plugin.savePluginData();
+            if (value) this.plugin.scheduleDesktopAutoGitPush();
+          }));
+
+      new Setting(containerEl)
+        .setName("Auto Git idle delay")
+        .setDesc("Seconds to wait after the last desktop vault change before auto push.")
+        .addText((text) => text
+          .setPlaceholder("60")
+          .setValue(String(settings.desktopAutoGitPushDelaySeconds))
+          .onChange(async (value) => {
+            const parsed = Number(value.trim());
+            if (Number.isSafeInteger(parsed) && parsed >= 5) {
+              settings.desktopAutoGitPushDelaySeconds = parsed;
+              await this.plugin.savePluginData();
+            }
+          }));
+
+      new Setting(containerEl)
+        .setName("Pull before desktop push")
+        .setDesc("Runs git pull --rebase --autostash before committing local desktop changes. Conflicts stop auto push.")
+        .addToggle((toggle) => toggle
+          .setValue(settings.desktopGitPullBeforePush)
+          .onChange(async (value) => {
+            settings.desktopGitPullBeforePush = value;
+            await this.plugin.savePluginData();
+          }));
+
+      new Setting(containerEl)
+        .setName("Desktop commit message prefix")
+        .setDesc("Prefix used for automatic and manual desktop Git commits.")
+        .addText((text) => text
+          .setPlaceholder("VaultBridge desktop autosync")
+          .setValue(settings.desktopGitCommitMessagePrefix)
+          .onChange(async (value) => {
+            settings.desktopGitCommitMessagePrefix = value;
+            await this.plugin.savePluginData();
           }));
     }
 
