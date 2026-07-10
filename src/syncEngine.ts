@@ -288,6 +288,11 @@ export class SyncEngine {
         await this.vault.modifyBinary(existing, content);
         return;
       }
+      if (await this.vault.adapter.exists(path)) {
+        await this.vault.adapter.writeBinary(path, content);
+        await this.vault.adapter.stat(path);
+        return;
+      }
       throw error;
     }
   }
