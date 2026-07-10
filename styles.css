@@ -6,3 +6,10 @@
   margin-top: 0.75rem;
   color: var(--text-muted);
 }
+
+.vaultbridge-sync-diagnostics {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+}

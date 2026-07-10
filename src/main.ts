@@ -98,6 +98,11 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         message,
         counts: { downloaded: 0, uploaded: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, unchanged: 0 },
         conflictPaths: [],
+        diagnostics: {
+          localPrefix: this.data.settings.localPrefix,
+          remotePrefix: this.data.settings.remotePrefix,
+          baseCommitSha: this.data.deviceState?.lastSyncedCommitSha || null
+        },
         completedAt: new Date().toISOString()
       };
       await this.savePluginData();

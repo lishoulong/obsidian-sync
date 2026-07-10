@@ -100,7 +100,24 @@ export interface SyncResult {
   };
   commitSha?: string;
   conflictPaths: string[];
+  diagnostics?: SyncDiagnostics;
   completedAt: string;
+}
+
+export interface SyncDiagnostics {
+  localPrefix: string;
+  remotePrefix: string;
+  baseCommitSha: string | null;
+  remoteCommitSha?: string;
+  localFiles?: number;
+  skippedFiles?: number;
+  pullCounts?: SyncCounts;
+  pushCounts?: SyncCounts;
+  downloadPaths?: string[];
+  deleteLocalPaths?: string[];
+  uploadPaths?: string[];
+  deleteRemotePaths?: string[];
+  conflictPaths?: string[];
 }
 
 export class VaultBridgeError extends Error {

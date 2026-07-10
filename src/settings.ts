@@ -202,5 +202,43 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
         text: `Last synced commit: ${this.plugin.data.deviceState.lastSyncedCommitSha.slice(0, 12)}`
       });
     }
+
+    if (this.plugin.data.lastResult) {
+      const result = this.plugin.data.lastResult;
+      const diagnostics = result.diagnostics;
+      const lines = [
+        `status: ${result.status}`,
+        `message: ${result.message}`,
+        `completedAt: ${result.completedAt}`,
+        `commit: ${result.commitSha || "none"}`,
+        `counts: down ${result.counts.downloaded}, up ${result.counts.uploaded}, delete ${result.counts.deletedLocal + result.counts.deletedRemote}, conflicts ${result.counts.conflicts}, unchanged ${result.counts.unchanged}`
+      ];
+      if (diagnostics) {
+        lines.push(
+          `prefixes: local "${diagnostics.localPrefix || "(empty)"}", remote "${diagnostics.remotePrefix || "(empty)"}"`,
+          `base: ${diagnostics.baseCommitSha ? diagnostics.baseCommitSha.slice(0, 12) : "none"}`,
+          `remote: ${diagnostics.remoteCommitSha ? diagnostics.remoteCommitSha.slice(0, 12) : "unknown"}`
+        );
+        if (typeof diagnostics.localFiles === "number") lines.push(`scan: local ${diagnostics.localFiles}, skipped ${diagnostics.skippedFiles || 0}`);
+        if (diagnostics.pullCounts) lines.push(`pull plan: down ${diagnostics.pullCounts.download}, deleteLocal ${diagnostics.pullCounts.deleteLocal}, up ${diagnostics.pullCounts.upload}, deleteRemote ${diagnostics.pullCounts.deleteRemote}, conflicts ${diagnostics.pullCounts.conflict}`);
+        if (diagnostics.pushCounts) lines.push(`push plan: down ${diagnostics.pushCounts.download}, deleteLocal ${diagnostics.pushCounts.deleteLocal}, up ${diagnostics.pushCounts.upload}, deleteRemote ${diagnostics.pushCounts.deleteRemote}, conflicts ${diagnostics.pushCounts.conflict}`);
+        addPathPreview(lines, "download", diagnostics.downloadPaths);
+        addPathPreview(lines, "deleteLocal", diagnostics.deleteLocalPaths);
+        addPathPreview(lines, "upload", diagnostics.uploadPaths);
+        addPathPreview(lines, "deleteRemote", diagnostics.deleteRemotePaths);
+        addPathPreview(lines, "conflict", diagnostics.conflictPaths);
+      }
+      containerEl.createEl("h3", { text: "Last sync diagnostics" });
+      containerEl.createEl("pre", {
+        cls: "vaultbridge-sync-diagnostics",
+        text: lines.join("\n")
+      });
+    }
   }
+}
+
+function addPathPreview(lines: string[], label: string, paths: string[] | undefined): void {
+  if (!paths || paths.length === 0) return;
+  lines.push(`${label}:`);
+  for (const path of paths) lines.push(`- ${path}`);
 }

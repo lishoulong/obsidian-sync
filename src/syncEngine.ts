@@ -1,7 +1,7 @@
 import { FileManager, Notice, TFile, TFolder, Vault } from "obsidian";
 import { base64ToArrayBuffer } from "./encoding";
 import { makeDeviceState, validateRequiredSettings } from "./settings";
-import { sameMeta, scanVault, readFileMeta, sha256Hex } from "./vaultScanner";
+import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaultScanner";
 import { isExcluded } from "./vaultScanner";
 import { localManifestToRemote, localToRemotePath, remoteToLocalPath } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
@@ -9,6 +9,7 @@ import {
   BlobEntry,
   DeviceState,
   FileMeta,
+  SyncDiagnostics,
   SyncPlan,
   SyncPlanEntry,
   SyncResult,
@@ -51,6 +52,7 @@ export class SyncEngine {
 
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
+    const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
     let downloaded = 0;
     let deletedLocal = 0;
     let uploaded = 0;
@@ -63,7 +65,8 @@ export class SyncEngine {
         status: "conflict",
         message: `${pullPlan.conflict.length} conflict(s) found. Review conflict copies before syncing again.`,
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pullPlan.conflict.length, unchanged: pullPlan.unchanged.length },
-        conflictPaths: conflictCopies
+        conflictPaths: conflictCopies,
+        diagnostics
       }, false);
     }
 
@@ -80,7 +83,8 @@ export class SyncEngine {
           : "Bootstrap pull complete.",
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
         commitSha: pullPlan.remoteCommitSha,
-        conflictPaths: []
+        conflictPaths: [],
+        diagnostics
       }, true);
     }
 
@@ -88,6 +92,9 @@ export class SyncEngine {
     const postPullScan = await scanVault(this.vault, this.data.settings);
     const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     const pushPlan = await client.syncCheck(deviceId, baseSha, postPullRemoteManifest);
+    diagnostics.pushCounts = pushPlan.counts;
+    diagnostics.uploadPaths = previewPaths(pushPlan.upload);
+    diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
 
     if (pushPlan.conflict.length > 0) {
       conflictCopies = await this.writeConflictCopies(client, pushPlan);
@@ -95,7 +102,8 @@ export class SyncEngine {
         status: "conflict",
         message: `${pushPlan.conflict.length} conflict(s) found after pull. Review conflict copies before syncing again.`,
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pushPlan.conflict.length, unchanged: pushPlan.unchanged.length },
-        conflictPaths: conflictCopies
+        conflictPaths: conflictCopies,
+        diagnostics
       }, false);
     }
 
@@ -112,7 +120,8 @@ export class SyncEngine {
         status: "success",
         message: "Vault is already in sync.",
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pushPlan.unchanged.length },
-        conflictPaths: []
+        conflictPaths: [],
+        diagnostics
       }, true);
     }
 
@@ -153,8 +162,26 @@ export class SyncEngine {
       message: `Sync complete at ${commit.commitSha.slice(0, 12)}.`,
       counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pushPlan.unchanged.length },
       commitSha: commit.commitSha,
-      conflictPaths: []
+      conflictPaths: [],
+      diagnostics
     }, true);
+  }
+
+  private createDiagnostics(scan: ScanResult, baseCommitSha: string | null, plan: SyncPlan): SyncDiagnostics {
+    return {
+      localPrefix: this.data.settings.localPrefix,
+      remotePrefix: this.data.settings.remotePrefix,
+      baseCommitSha,
+      remoteCommitSha: plan.remoteCommitSha,
+      localFiles: Object.keys(scan.manifest).length,
+      skippedFiles: scan.skipped.length,
+      pullCounts: plan.counts,
+      downloadPaths: previewPaths(plan.download),
+      deleteLocalPaths: previewPaths(plan.deleteLocal),
+      uploadPaths: previewPaths(plan.upload),
+      deleteRemotePaths: previewPaths(plan.deleteRemote),
+      conflictPaths: previewPaths(plan.conflict)
+    };
   }
 
   private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>): Promise<number> {
@@ -316,6 +343,10 @@ function requireBlob(entry: SyncPlanEntry): string {
 function formatTimestamp(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function previewPaths(entries: SyncPlanEntry[]): string[] {
+  return entries.slice(0, 8).map((entry) => entry.path).filter(Boolean);
 }
 
 export function showResultNotice(result: SyncResult): void {
