@@ -53,6 +53,7 @@ export class SyncEngine {
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
     const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
+    new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
     let downloaded = 0;
     let deletedLocal = 0;
     let uploaded = 0;
@@ -70,7 +71,7 @@ export class SyncEngine {
       }, false);
     }
 
-    downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes);
+    downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes, diagnostics);
     deletedLocal += await this.applyLocalDeletes(pullPlan, initialScan.hashes);
 
     if (bootstrapping) {
@@ -93,6 +94,7 @@ export class SyncEngine {
     const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     const pushPlan = await client.syncCheck(deviceId, baseSha, postPullRemoteManifest);
     diagnostics.pushCounts = pushPlan.counts;
+    addRequestId(diagnostics, pushPlan.requestId);
     diagnostics.uploadPaths = previewPaths(pushPlan.upload);
     diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
 
@@ -134,7 +136,9 @@ export class SyncEngine {
       const file = this.vault.getFileByPath(path);
       if (!file) throw new VaultBridgeError("missing_upload_file", `${path} no longer exists for remote ${remotePath}.`);
       const bytes = await this.vault.readBinary(file);
-      blobs.push(await client.createBlob(remotePath, bytes));
+      const blob = await client.createBlob(remotePath, bytes);
+      blobs.push(blob);
+      addRequestId(diagnostics, blob.requestId);
       uploaded += 1;
     }
 
@@ -154,6 +158,7 @@ export class SyncEngine {
       blobs,
       delete: deleteRemote
     });
+    addRequestId(diagnostics, commit.requestId);
     this.data.deviceState = commit.deviceState;
     await this.saveData(this.data);
 
@@ -168,7 +173,7 @@ export class SyncEngine {
   }
 
   private createDiagnostics(scan: ScanResult, baseCommitSha: string | null, plan: SyncPlan): SyncDiagnostics {
-    return {
+    const diagnostics: SyncDiagnostics = {
       localPrefix: this.data.settings.localPrefix,
       remotePrefix: this.data.settings.remotePrefix,
       baseCommitSha,
@@ -182,9 +187,11 @@ export class SyncEngine {
       deleteRemotePaths: previewPaths(plan.deleteRemote),
       conflictPaths: previewPaths(plan.conflict)
     };
+    addRequestId(diagnostics, plan.requestId);
+    return diagnostics;
   }
 
-  private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>): Promise<number> {
+  private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>, diagnostics: SyncDiagnostics): Promise<number> {
     let count = 0;
     for (const entry of plan.download) {
       const remotePath = requirePath(entry);
@@ -194,6 +201,7 @@ export class SyncEngine {
       const blobSha = requireBlob(entry);
       await this.assertLocalUnchanged(path, initialHashes.get(path));
       const pulled = await client.pullFile(plan.sessionToken, remotePath, blobSha);
+      addRequestId(diagnostics, pulled.requestId);
       const content = base64ToArrayBuffer(pulled.content);
       const hash = await sha256Hex(content);
       if (content.byteLength !== pulled.size || hash !== pulled.sha256) {
@@ -347,6 +355,12 @@ function formatTimestamp(date: Date): string {
 
 function previewPaths(entries: SyncPlanEntry[]): string[] {
   return entries.slice(0, 8).map((entry) => entry.path).filter(Boolean);
+}
+
+function addRequestId(diagnostics: SyncDiagnostics, requestId: string | undefined): void {
+  if (!requestId) return;
+  diagnostics.requestIds = diagnostics.requestIds || [];
+  if (!diagnostics.requestIds.includes(requestId)) diagnostics.requestIds.push(requestId);
 }
 
 export function showResultNotice(result: SyncResult): void {

@@ -222,6 +222,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
         if (typeof diagnostics.localFiles === "number") lines.push(`scan: local ${diagnostics.localFiles}, skipped ${diagnostics.skippedFiles || 0}`);
         if (diagnostics.pullCounts) lines.push(`pull plan: down ${diagnostics.pullCounts.download}, deleteLocal ${diagnostics.pullCounts.deleteLocal}, up ${diagnostics.pullCounts.upload}, deleteRemote ${diagnostics.pullCounts.deleteRemote}, conflicts ${diagnostics.pullCounts.conflict}`);
         if (diagnostics.pushCounts) lines.push(`push plan: down ${diagnostics.pushCounts.download}, deleteLocal ${diagnostics.pushCounts.deleteLocal}, up ${diagnostics.pushCounts.upload}, deleteRemote ${diagnostics.pushCounts.deleteRemote}, conflicts ${diagnostics.pushCounts.conflict}`);
+        if (diagnostics.requestIds?.length) lines.push(`requestIds: ${diagnostics.requestIds.join(", ")}`);
         addPathPreview(lines, "download", diagnostics.downloadPaths);
         addPathPreview(lines, "deleteLocal", diagnostics.deleteLocalPaths);
         addPathPreview(lines, "upload", diagnostics.uploadPaths);

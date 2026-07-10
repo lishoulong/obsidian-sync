@@ -15,6 +15,7 @@ import { normalizeWorkerUrl } from "./settings";
 interface WorkerErrorBody {
   error?: string;
   message?: string;
+  requestId?: string;
 }
 
 export class WorkerClient {
@@ -72,7 +73,8 @@ export class WorkerClient {
 
     if (response.status < 200 || response.status >= 300) {
       const parsed = parseWorkerError(response.json, response.text);
-      throw new VaultBridgeError(parsed.error || `http_${response.status}`, sanitizeError(parsed.message || `Worker returned ${response.status}`));
+      const requestHint = parsed.requestId ? ` [requestId ${parsed.requestId}]` : "";
+      throw new VaultBridgeError(parsed.error || `http_${response.status}`, `${sanitizeError(parsed.message || `Worker returned ${response.status}`)}${requestHint}`);
     }
 
     return response.json as T;

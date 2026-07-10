@@ -38,6 +38,7 @@ export interface SyncPlanEntry {
 
 export interface SyncPlan {
   protocol: 2;
+  requestId?: string;
   deviceId: string;
   bootstrap: boolean;
   baseCommitSha: string | null;
@@ -64,6 +65,7 @@ export interface SyncCounts {
 }
 
 export interface PullFileResponse {
+  requestId?: string;
   path: string;
   commitSha: string;
   blobSha: string;
@@ -74,6 +76,7 @@ export interface PullFileResponse {
 }
 
 export interface BlobEntry {
+  requestId?: string;
   path: string;
   sha: string;
 }
@@ -81,6 +84,7 @@ export interface BlobEntry {
 export interface CommitResponse {
   ok: boolean;
   protocol: 2;
+  requestId?: string;
   commitSha: string;
   treeSha: string;
   changed: number;
@@ -118,6 +122,7 @@ export interface SyncDiagnostics {
   uploadPaths?: string[];
   deleteRemotePaths?: string[];
   conflictPaths?: string[];
+  requestIds?: string[];
 }
 
 export class VaultBridgeError extends Error {
