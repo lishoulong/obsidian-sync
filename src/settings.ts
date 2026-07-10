@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgeSyncPlugin from "./main";
 import { DeviceState, VaultBridgePluginData, VaultBridgeSettings } from "./types";
 
@@ -183,6 +183,17 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
         .onClick(() => {
           void this.plugin.syncNow();
         }));
+
+    if (Platform.isDesktopApp) {
+      new Setting(containerEl)
+        .setName("Git commit and push")
+        .setDesc("Commits local desktop vault changes with Git and pushes them to the configured remote.")
+        .addButton((button) => button
+          .setButtonText("Git push")
+          .onClick(() => {
+            void this.plugin.desktopGitCommitPush();
+          }));
+    }
 
     new Setting(containerEl)
       .setName("Reset device state")

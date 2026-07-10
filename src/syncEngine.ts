@@ -49,7 +49,7 @@ export class SyncEngine {
     const initialRemoteManifest = localManifestToRemote(initialScan.manifest, this.data.settings);
     const deviceId = this.data.settings.deviceId;
     const baseSha = stateCommitSha(this.data.deviceState);
-    const bootstrapping = baseSha === null;
+    const pushBaseSha = baseSha || undefined;
 
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
@@ -88,28 +88,12 @@ export class SyncEngine {
     diagnostics.phase = "delete_local";
     deletedLocal += await this.applyLocalDeletes(pullPlan, initialScan.hashes);
 
-    if (bootstrapping) {
-      diagnostics.phase = "bootstrap_complete";
-      this.data.deviceState = { version: 2, deviceId, lastSyncedCommitSha: pullPlan.remoteCommitSha };
-      await this.saveData(this.data);
-      return await this.finish({
-        status: "success",
-        message: pullPlan.upload.length > 0 || pullPlan.deleteRemote.length > 0
-          ? "Bootstrap pull complete. Local-only files were not uploaded; run sync again to push local changes."
-          : "Bootstrap pull complete.",
-        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
-        commitSha: pullPlan.remoteCommitSha,
-        conflictPaths: [],
-        diagnostics
-      }, true);
-    }
-
     diagnostics.phase = "post_pull_scan";
     this.updateStatus("Re-scanning after pull...");
     const postPullScan = await scanVault(this.vault, this.data.settings);
     const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     diagnostics.phase = "push_plan";
-    const pushPlan = await client.syncCheck(deviceId, baseSha, postPullRemoteManifest);
+    const pushPlan = await client.syncCheck(deviceId, pushBaseSha || pullPlan.remoteCommitSha, postPullRemoteManifest);
     diagnostics.pushCounts = pushPlan.counts;
     addRequestId(diagnostics, pushPlan.requestId);
     diagnostics.uploadPaths = previewPaths(pushPlan.upload);

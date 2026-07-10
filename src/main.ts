@@ -3,10 +3,12 @@ import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceS
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
+import { desktopGitCommitPush } from "./desktopGit";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
   private syncing = false;
+  private gitPushing = false;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -30,6 +32,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         void this.testConnection()
           .then(() => new Notice("VaultBridge Worker connection OK."))
           .catch((error) => new Notice(formatError(error), 10000));
+      }
+    });
+
+    this.addCommand({
+      id: "desktop-git-commit-push",
+      name: "Desktop Git commit and push",
+      callback: () => {
+        void this.desktopGitCommitPush();
       }
     });
 
@@ -112,6 +122,24 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       new Notice(message, 12000);
     } finally {
       this.syncing = false;
+    }
+  }
+
+  async desktopGitCommitPush(): Promise<void> {
+    if (this.gitPushing) {
+      new Notice("VaultBridge Git push is already running.");
+      return;
+    }
+
+    this.gitPushing = true;
+    new Notice("VaultBridge Git push started.");
+    try {
+      const result = await desktopGitCommitPush(this.app, this.data.settings);
+      new Notice(result.message, result.commitSha ? 6000 : 4000);
+    } catch (error) {
+      new Notice(formatError(error), 12000);
+    } finally {
+      this.gitPushing = false;
     }
   }
 }
