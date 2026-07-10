@@ -1,4 +1,4 @@
-import { FileManager, Notice, TFile, Vault } from "obsidian";
+import { FileManager, Notice, TFile, TFolder, Vault } from "obsidian";
 import { base64ToArrayBuffer } from "./encoding";
 import { makeDeviceState, validateRequiredSettings } from "./settings";
 import { sameMeta, scanVault, readFileMeta, sha256Hex } from "./vaultScanner";
@@ -247,13 +247,23 @@ export class SyncEngine {
     let current = "";
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
-      if (this.vault.getFolderByPath(current)) continue;
+      if (await this.folderExists(current)) continue;
       try {
         await this.vault.createFolder(current);
       } catch (error) {
-        if (!this.vault.getFolderByPath(current)) throw error;
+        if (!(await this.folderExists(current))) throw error;
       }
     }
+  }
+
+  private async folderExists(path: string): Promise<boolean> {
+    const abstract = this.vault.getAbstractFileByPath(path);
+    if (abstract instanceof TFolder) return true;
+    if (abstract) throw new VaultBridgeError("parent_not_folder", `${path} exists but is not a folder.`);
+    const stat = await this.vault.adapter.stat(path);
+    if (!stat) return false;
+    if (stat.type === "folder") return true;
+    throw new VaultBridgeError("parent_not_folder", `${path} exists but is not a folder.`);
   }
 
   private async nextConflictPath(path: string): Promise<string> {
