@@ -46,7 +46,7 @@ The plugin SHALL upload local changes and commit them through Protocol v2 after 
 
 #### Scenario: Commit local changes
 - **WHEN** all required blobs have been created and there are local changes or remote deletions to commit
-- **THEN** the plugin SHALL call `/v2/commit` with the complete current manifest, blob entries, delete list, device ID, and session token
+- **THEN** the plugin SHALL call `/v2/commit` with a manifest patch, blob entries, device ID, and session token
 
 ### Requirement: Session staleness handling
 The plugin SHALL stop safely when the Worker reports that the remote branch changed after the sync plan was created.

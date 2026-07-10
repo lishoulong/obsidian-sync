@@ -37,7 +37,7 @@
 - [x] 5.3 Apply download entries without overwriting files that changed after the plan was created.
 - [x] 5.4 Apply local deletions conservatively using Obsidian trash behavior when available.
 - [x] 5.5 Re-scan after pull before deciding upload and remote deletion work.
-- [x] 5.6 Upload local changes as blobs and commit the complete current manifest.
+- [x] 5.6 Upload local changes as blobs and commit a manifest patch.
 - [x] 5.7 Persist `nextDeviceState` or `deviceState` only after the corresponding phase succeeds.
 - [x] 5.8 Stop safely on stale, expired, interrupted, or failed sync sessions without advancing device state.
 

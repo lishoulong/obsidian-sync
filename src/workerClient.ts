@@ -46,9 +46,11 @@ export class WorkerClient {
     deviceId: string;
     sessionToken: string;
     message: string;
-    files: FileManifest;
+    patch: {
+      upload: FileManifest;
+      delete: string[];
+    };
     blobs: BlobEntry[];
-    delete: string[];
   }): Promise<CommitResponse> {
     return this.request("POST", "/v2/commit", input, true);
   }

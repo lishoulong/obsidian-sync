@@ -8,6 +8,7 @@ import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
 import {
   BlobEntry,
   DeviceState,
+  FileManifest,
   FileMeta,
   SyncDiagnostics,
   SyncPlan,
@@ -149,6 +150,7 @@ export class SyncEngine {
     diagnostics.phase = "upload_blobs";
     this.updateStatus("Uploading local changes...");
     const blobs: BlobEntry[] = [];
+    const upsert: FileManifest = {};
     for (const entry of pushPlan.upload) {
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
@@ -158,6 +160,7 @@ export class SyncEngine {
       const bytes = await this.vault.readBinary(file);
       const blob = await client.createBlob(remotePath, bytes);
       blobs.push(blob);
+      upsert[remotePath] = postPullRemoteManifest[remotePath];
       addRequestId(diagnostics, blob.requestId);
       uploaded += 1;
     }
@@ -176,9 +179,11 @@ export class SyncEngine {
       deviceId,
       sessionToken: pushPlan.sessionToken,
       message: syncMessage(deviceId),
-      files: postPullRemoteManifest,
+      patch: {
+        upload: upsert,
+        delete: deleteRemote
+      },
       blobs,
-      delete: deleteRemote
     });
     addRequestId(diagnostics, commit.requestId);
     diagnostics.phase = "complete";
