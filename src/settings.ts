@@ -146,7 +146,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Test connection")
-      .setDesc("Checks Worker health and Protocol v2 compatibility without modifying vault files.")
+      .setDesc("Checks Worker health, authentication, and Protocol v2 compatibility without modifying vault files.")
       .addButton((button) => button
         .setButtonText("Test")
         .onClick(async () => {

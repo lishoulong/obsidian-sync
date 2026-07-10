@@ -53,11 +53,13 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   }
 
   async testConnection(): Promise<void> {
-    if (!this.data.settings.workerUrl.trim()) throw new Error("Worker URL is required.");
-    const health = await new WorkerClient(this.data.settings).health();
+    validateRequiredSettings(this.data.settings);
+    const client = new WorkerClient(this.data.settings);
+    const health = await client.health();
     if (!health.ok || health.service !== "vaultbridge" || health.protocol !== 2) {
       throw new Error("Worker is reachable but does not report VaultBridge Protocol v2.");
     }
+    await client.syncCheck(this.data.settings.deviceId, null, {});
   }
 
   async syncNow(): Promise<void> {
