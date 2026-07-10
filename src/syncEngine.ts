@@ -298,6 +298,19 @@ export class SyncEngine {
           continue;
         }
       }
+      const discoveredPaths = this.findConflictCopiesForPath(path);
+      if (discoveredPaths.length > 0) {
+        this.data.pendingConflicts[remotePath] = {
+          path: remotePath,
+          localPath: path,
+          remoteCommitSha: plan.remoteCommitSha,
+          remoteBlobSha: entry.remoteBlobSha,
+          conflictPaths: discoveredPaths,
+          createdAt: new Date().toISOString()
+        };
+        paths.push(...discoveredPaths);
+        continue;
+      }
       const pulled = await client.pullFile(plan.sessionToken, remotePath, entry.remoteBlobSha);
       const content = base64ToArrayBuffer(pulled.content);
       const conflictPath = await this.nextConflictPath(path);
@@ -351,6 +364,20 @@ export class SyncEngine {
       if (await this.pathExists(path)) existing.push(path);
     }
     return existing;
+  }
+
+  private findConflictCopiesForPath(path: string): string[] {
+    const slash = path.lastIndexOf("/");
+    const folder = slash >= 0 ? path.slice(0, slash + 1) : "";
+    const filename = slash >= 0 ? path.slice(slash + 1) : path;
+    const dot = filename.lastIndexOf(".");
+    const base = dot > 0 ? filename.slice(0, dot) : filename;
+    const extension = dot > 0 ? filename.slice(dot) : "";
+    const prefix = `${folder}${base}.remote-conflict-`;
+
+    return this.vault.getFiles()
+      .map((file) => file.path)
+      .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(extension));
   }
 
   private clearPendingConflicts(): void {
