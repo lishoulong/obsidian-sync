@@ -1,4 +1,3 @@
-import { requestUrl } from "obsidian";
 import { arrayBufferToBase64 } from "./encoding";
 import {
   BlobEntry,
@@ -17,6 +16,8 @@ interface WorkerErrorBody {
   message?: string;
   requestId?: string;
 }
+
+const REQUEST_TIMEOUT_MS = 120000;
 
 export class WorkerClient {
   private settings: VaultBridgeSettings;
@@ -57,34 +58,40 @@ export class WorkerClient {
     const headers: Record<string, string> = {};
     if (authenticated) headers.authorization = `Bearer ${this.settings.syncToken}`;
 
-    let response;
+    let response: Response;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      response = await requestUrl({
-        url,
+      response = await fetch(url, {
         method,
-        contentType: "application/json",
-        headers,
+        headers: {
+          ...headers,
+          "content-type": "application/json"
+        },
         body: body == null ? undefined : JSON.stringify(body),
-        throw: false
+        signal: controller.signal
       });
     } catch (error) {
-      throw new VaultBridgeError("network_error", error instanceof Error ? error.message : "Network request failed.");
+      const message = error instanceof Error ? error.message : "Network request failed.";
+      throw new VaultBridgeError("network_error", `${method} ${path} failed: ${message}`);
+    } finally {
+      window.clearTimeout(timeout);
     }
 
+    const text = await response.text();
+    const parsed = parseJson(text);
     if (response.status < 200 || response.status >= 300) {
-      const parsed = parseWorkerError(response.json, response.text);
       const requestHint = parsed.requestId ? ` [requestId ${parsed.requestId}]` : "";
       throw new VaultBridgeError(parsed.error || `http_${response.status}`, `${sanitizeError(parsed.message || `Worker returned ${response.status}`)}${requestHint}`);
     }
 
-    return response.json as T;
+    return parsed as T;
   }
 }
 
-function parseWorkerError(json: unknown, text: string): WorkerErrorBody {
-  if (json && typeof json === "object") return json as WorkerErrorBody;
+function parseJson(text: string): WorkerErrorBody & Record<string, unknown> {
   try {
-    return JSON.parse(text) as WorkerErrorBody;
+    return text ? JSON.parse(text) : {};
   } catch {
     return { message: text };
   }

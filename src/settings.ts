@@ -219,6 +219,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           `base: ${diagnostics.baseCommitSha ? diagnostics.baseCommitSha.slice(0, 12) : "none"}`,
           `remote: ${diagnostics.remoteCommitSha ? diagnostics.remoteCommitSha.slice(0, 12) : "unknown"}`
         );
+        if (diagnostics.phase) lines.push(`phase: ${diagnostics.phase}`);
         if (typeof diagnostics.localFiles === "number") lines.push(`scan: local ${diagnostics.localFiles}, skipped ${diagnostics.skippedFiles || 0}`);
         if (diagnostics.pullCounts) lines.push(`pull plan: down ${diagnostics.pullCounts.download}, deleteLocal ${diagnostics.pullCounts.deleteLocal}, up ${diagnostics.pullCounts.upload}, deleteRemote ${diagnostics.pullCounts.deleteRemote}, conflicts ${diagnostics.pullCounts.conflict}`);
         if (diagnostics.pushCounts) lines.push(`push plan: down ${diagnostics.pushCounts.download}, deleteLocal ${diagnostics.pushCounts.deleteLocal}, up ${diagnostics.pushCounts.upload}, deleteRemote ${diagnostics.pushCounts.deleteRemote}, conflicts ${diagnostics.pushCounts.conflict}`);

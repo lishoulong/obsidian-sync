@@ -123,6 +123,7 @@ export interface SyncDiagnostics {
   deleteRemotePaths?: string[];
   conflictPaths?: string[];
   requestIds?: string[];
+  phase?: string;
 }
 
 export class VaultBridgeError extends Error {

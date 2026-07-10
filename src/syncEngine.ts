@@ -69,7 +69,9 @@ export class SyncEngine {
     let deletedRemote = 0;
     let conflictCopies: string[] = [];
 
+    try {
     if (pullPlan.conflict.length > 0) {
+      diagnostics.phase = "conflict_pull";
       conflictCopies = await this.writeConflictCopies(client, pullPlan);
       return await this.finish({
         status: "conflict",
@@ -80,10 +82,13 @@ export class SyncEngine {
       }, false);
     }
 
+    diagnostics.phase = "download";
     downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes, diagnostics);
+    diagnostics.phase = "delete_local";
     deletedLocal += await this.applyLocalDeletes(pullPlan, initialScan.hashes);
 
     if (bootstrapping) {
+      diagnostics.phase = "bootstrap_complete";
       this.data.deviceState = { version: 2, deviceId, lastSyncedCommitSha: pullPlan.remoteCommitSha };
       await this.saveData(this.data);
       return await this.finish({
@@ -98,9 +103,11 @@ export class SyncEngine {
       }, true);
     }
 
+    diagnostics.phase = "post_pull_scan";
     this.updateStatus("Re-scanning after pull...");
     const postPullScan = await scanVault(this.vault, this.data.settings);
     const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
+    diagnostics.phase = "push_plan";
     const pushPlan = await client.syncCheck(deviceId, baseSha, postPullRemoteManifest);
     diagnostics.pushCounts = pushPlan.counts;
     addRequestId(diagnostics, pushPlan.requestId);
@@ -108,6 +115,7 @@ export class SyncEngine {
     diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
 
     if (pushPlan.conflict.length > 0) {
+      diagnostics.phase = "conflict_after_pull";
       conflictCopies = await this.writeConflictCopies(client, pushPlan);
       return await this.finish({
         status: "conflict",
@@ -119,10 +127,12 @@ export class SyncEngine {
     }
 
     if (this.hasRelevantRemoteEntries(pushPlan.download) || this.hasRelevantRemoteEntries(pushPlan.deleteLocal)) {
+      diagnostics.phase = "plan_not_clean";
       throw new VaultBridgeError("plan_not_clean", "Remote changes remain after pull. Run sync again.");
     }
 
     if (pushPlan.upload.length === 0 && pushPlan.deleteRemote.length === 0) {
+      diagnostics.phase = "already_in_sync";
       if (pushPlan.nextDeviceState) {
         this.data.deviceState = pushPlan.nextDeviceState;
         await this.saveData(this.data);
@@ -136,13 +146,14 @@ export class SyncEngine {
       }, true);
     }
 
+    diagnostics.phase = "upload_blobs";
     this.updateStatus("Uploading local changes...");
     const blobs: BlobEntry[] = [];
     for (const entry of pushPlan.upload) {
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
-      const file = this.vault.getFileByPath(path);
+      const file = postPullScan.files.get(path) || this.vault.getFileByPath(path);
       if (!file) throw new VaultBridgeError("missing_upload_file", `${path} no longer exists for remote ${remotePath}.`);
       const bytes = await this.vault.readBinary(file);
       const blob = await client.createBlob(remotePath, bytes);
@@ -151,6 +162,7 @@ export class SyncEngine {
       uploaded += 1;
     }
 
+    diagnostics.phase = "prepare_commit";
     const deleteRemote = pushPlan.deleteRemote.map((entry) => requirePath(entry))
       .filter((remotePath) => {
         const localPath = this.remotePathOrSkip(remotePath);
@@ -158,6 +170,7 @@ export class SyncEngine {
       });
     deletedRemote = deleteRemote.length;
 
+    diagnostics.phase = "commit";
     this.updateStatus("Committing remote changes...");
     const commit = await client.commit({
       deviceId,
@@ -168,6 +181,7 @@ export class SyncEngine {
       delete: deleteRemote
     });
     addRequestId(diagnostics, commit.requestId);
+    diagnostics.phase = "complete";
     this.data.deviceState = commit.deviceState;
     await this.saveData(this.data);
 
@@ -179,6 +193,15 @@ export class SyncEngine {
       conflictPaths: [],
       diagnostics
     }, true);
+    } catch (error) {
+      return await this.finish({
+        status: "error",
+        message: formatSyncError(error),
+        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
+        conflictPaths: conflictCopies,
+        diagnostics
+      }, false);
+    }
   }
 
   private createDiagnostics(scan: ScanResult, baseCommitSha: string | null, plan: SyncPlan): SyncDiagnostics {
@@ -425,6 +448,12 @@ function addRequestId(diagnostics: SyncDiagnostics, requestId: string | undefine
 function wrapFileOperationError(operation: string, path: string, error: unknown): VaultBridgeError {
   const message = error instanceof Error ? error.message : String(error);
   return new VaultBridgeError(operation, `${operation} failed for ${path}: ${message}`);
+}
+
+function formatSyncError(error: unknown): string {
+  if (error instanceof VaultBridgeError) return `${error.message} (${error.code})`;
+  if (error instanceof Error) return error.message.replace(/Bearer\s+\S+/g, "Bearer [redacted]");
+  return "VaultBridge sync failed.";
 }
 
 function sleep(milliseconds: number): Promise<void> {
