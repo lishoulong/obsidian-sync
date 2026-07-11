@@ -14,9 +14,15 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadPluginData();
 
-    this.addRibbonIcon("refresh-cw", "VaultBridge Sync", () => {
-      void this.syncNow();
-    });
+    if (Platform.isDesktopApp) {
+      this.addRibbonIcon("git-branch", "VaultBridge Git push", () => {
+        void this.desktopGitCommitPush();
+      });
+    } else {
+      this.addRibbonIcon("refresh-cw", "VaultBridge Sync", () => {
+        void this.syncNow();
+      });
+    }
 
     this.addCommand({
       id: "sync-now",
@@ -78,6 +84,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   }
 
   async testConnection(): Promise<void> {
+    this.requireWorkerSyncEnabled();
     validateRequiredSettings(this.data.settings);
     const client = new WorkerClient(this.data.settings);
     const health = await client.health();
@@ -88,6 +95,13 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   }
 
   async syncNow(): Promise<void> {
+    try {
+      this.requireWorkerSyncEnabled();
+    } catch (error) {
+      new Notice(formatError(error), 10000);
+      return;
+    }
+
     if (this.syncing) {
       new Notice("VaultBridge sync is already running.");
       return;
@@ -220,6 +234,12 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       new Notice(formatError(error), 12000);
     } finally {
       this.gitPushing = false;
+    }
+  }
+
+  private requireWorkerSyncEnabled(): void {
+    if (Platform.isDesktopApp && !this.data.settings.desktopWorkerSyncEnabled) {
+      throw new Error("Worker sync is hidden on desktop. Enable Worker sync on desktop in settings to use this command.");
     }
   }
 }

@@ -51,7 +51,19 @@ The plugin is designed with `isDesktopOnly: false` and avoids native Git, Node f
 
 ## Configuration
 
-The plugin requires:
+Desktop and mobile use different sync paths by default.
+
+On Obsidian desktop, VaultBridge Sync uses the local `git` command. You normally only need:
+
+- `Git commit and push`
+- `Automatic desktop Git push`
+- `Auto Git idle delay`
+- `Pull before desktop push`
+- `Files to commit`, for example `vault/` when notes live under a `vault` folder
+
+Worker settings are hidden on desktop by default. Enable `Enable Worker sync on desktop` only when you intentionally want to run the mobile-style Worker sync workflow from a desktop vault.
+
+On Obsidian mobile, VaultBridge Sync uses the Cloudflare Worker protocol and requires:
 
 - Worker URL, for example `https://vaultbridge.example.workers.dev`
 - `SYNC_TOKEN` configured on the Worker
