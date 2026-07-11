@@ -19,6 +19,12 @@ interface ChatCompletionResponse {
   }>;
 }
 
+interface ModelsResponse {
+  data?: Array<{
+    id?: string;
+  }>;
+}
+
 const SUPPORTED_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
 const REQUEST_TIMEOUT_MS = 120000;
 
@@ -31,6 +37,40 @@ export function validateAutoMergeSettings(settings: VaultBridgeSettings): string
   if (!settings.autoMergeApiKey.trim()) return "Auto Merge API key is not configured.";
   if (!settings.autoMergeModel.trim()) return "Auto Merge model is not configured.";
   return null;
+}
+
+export async function listAutoMergeModels(settings: VaultBridgeSettings): Promise<string[]> {
+  if (!settings.autoMergeEndpoint.trim()) throw new VaultBridgeError("auto_merge_config", "Auto Merge base URL is not configured.");
+  if (!settings.autoMergeApiKey.trim()) throw new VaultBridgeError("auto_merge_config", "Auto Merge API key is not configured.");
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(modelsUrl(settings.autoMergeEndpoint), {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${settings.autoMergeApiKey.trim()}`
+      },
+      signal: controller.signal
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Network request failed.";
+    throw new VaultBridgeError("auto_merge_network", `Model list request failed: ${message}`);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+
+  const text = await response.text();
+  if (response.status < 200 || response.status >= 300) {
+    throw new VaultBridgeError("auto_merge_http", `Model list request failed with ${response.status}: ${sanitizeError(text)}`);
+  }
+
+  const parsed = parseJson(text) as ModelsResponse;
+  const models = (parsed.data || [])
+    .map((model) => model.id)
+    .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+  return [...new Set(models)].sort();
 }
 
 export async function requestAutoMerge(input: {
@@ -147,6 +187,12 @@ function chatCompletionsUrl(baseUrl: string): string {
   const normalized = baseUrl.trim().replace(/\/+$/, "");
   if (normalized.endsWith("/chat/completions")) return normalized;
   return `${normalized}/chat/completions`;
+}
+
+function modelsUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  if (normalized.endsWith("/chat/completions")) return `${normalized.slice(0, -"/chat/completions".length)}/models`;
+  return `${normalized}/models`;
 }
 
 function parseJson(text: string): unknown {

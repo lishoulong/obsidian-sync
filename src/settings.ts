@@ -1,10 +1,20 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgeSyncPlugin from "./main";
+import { listAutoMergeModels } from "./autoMerge";
 import { DeviceState, VaultBridgePluginData, VaultBridgeSettings } from "./types";
 
 const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_AUTO_MERGE_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_AUTO_MERGE_MODEL = "deepseek-v4-flash";
+const CLOUDFLARE_WORKERS_URL = "https://dash.cloudflare.com/?to=/:account/workers-and-pages";
+const CLOUDFLARE_WORKERS_DOCS_URL = "https://developers.cloudflare.com/workers/";
+const DEEPSEEK_API_KEYS_URL = "https://platform.deepseek.com/api_keys";
+const DEFAULT_AUTO_MERGE_MODELS = [
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "deepseek-chat",
+  "deepseek-reasoner"
+];
 
 export const DEFAULT_EXCLUDE_PATTERNS = [
   ".git/",
@@ -92,6 +102,7 @@ export function maskToken(token: string): string {
 
 export class VaultBridgeSettingTab extends PluginSettingTab {
   plugin: VaultBridgeSyncPlugin;
+  private autoMergeModelOptions = [...DEFAULT_AUTO_MERGE_MODELS];
 
   constructor(app: App, plugin: VaultBridgeSyncPlugin) {
     super(app, plugin);
@@ -205,18 +216,28 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Worker URL")
-        .setDesc("Cloudflare Worker base URL.")
+        .setDesc("Paste the deployed Cloudflare Worker URL for this sync service.")
         .addText((text) => text
           .setPlaceholder("https://vaultbridge.example.workers.dev")
           .setValue(settings.workerUrl)
           .onChange(async (value) => {
             settings.workerUrl = normalizeWorkerUrl(value);
             await this.plugin.savePluginData();
+          }))
+        .addButton((button) => button
+          .setButtonText("Open Cloudflare")
+          .onClick(() => {
+            openExternal(CLOUDFLARE_WORKERS_URL);
+          }))
+        .addButton((button) => button
+          .setButtonText("Docs")
+          .onClick(() => {
+            openExternal(CLOUDFLARE_WORKERS_DOCS_URL);
           }));
 
       new Setting(containerEl)
         .setName("SYNC_TOKEN")
-        .setDesc(`Stored in plugin data. Current value: ${maskToken(settings.syncToken) || "not set"}`)
+        .setDesc(`Shared secret that must match the Worker's SYNC_TOKEN environment variable. Current value: ${maskToken(settings.syncToken) || "not set"}`)
         .addText((text) => {
           text.inputEl.type = "password";
           text
@@ -226,37 +247,25 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
               settings.syncToken = value.trim();
               await this.plugin.savePluginData();
             });
-        });
-
-      new Setting(containerEl)
-        .setName("Device ID")
-        .setDesc("Stable per-device identifier used by Protocol v2.")
-        .addText((text) => text
-          .setPlaceholder("fred-iphone")
-          .setValue(settings.deviceId)
-          .onChange(async (value) => {
-            settings.deviceId = value.trim();
-            this.plugin.data.deviceState = makeDeviceState(settings, this.plugin.data.deviceState);
+        })
+        .addButton((button) => button
+          .setButtonText("Generate")
+          .onClick(async () => {
+            settings.syncToken = generateSecretToken();
+            await copyToClipboard(settings.syncToken);
             await this.plugin.savePluginData();
+            new Notice("SYNC_TOKEN generated and copied. Add the same value to your Cloudflare Worker secret.");
+            this.display();
+          }))
+        .addButton((button) => button
+          .setButtonText("Open Cloudflare")
+          .onClick(() => {
+            openExternal(CLOUDFLARE_WORKERS_URL);
           }));
 
       new Setting(containerEl)
-        .setName("Maximum file size")
-        .setDesc("Files larger than this byte limit stop sync before upload.")
-        .addText((text) => text
-          .setPlaceholder(String(DEFAULT_MAX_FILE_BYTES))
-          .setValue(String(settings.maxFileBytes))
-          .onChange(async (value) => {
-            const parsed = Number(value.trim());
-            if (Number.isSafeInteger(parsed) && parsed > 0) {
-              settings.maxFileBytes = parsed;
-              await this.plugin.savePluginData();
-            }
-          }));
-
-      new Setting(containerEl)
-        .setName("Remote path prefix")
-        .setDesc("Git repository path prefix for this Obsidian vault. Use vault/ when the repo stores notes under a vault folder.")
+        .setName("Repository notes folder")
+        .setDesc("Folder in the GitHub repository that contains notes. Keep vault/ unless you changed the Worker repository layout.")
         .addText((text) => text
           .setPlaceholder("vault/")
           .setValue(settings.remotePrefix)
@@ -267,8 +276,8 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       if (!isDesktop) {
         new Setting(containerEl)
-          .setName("Local path prefix")
-          .setDesc("Local folder inside the currently opened vault that contains notes.")
+          .setName("Local notes folder")
+          .setDesc("Folder inside this Obsidian vault that contains notes. Leave empty when the whole vault should sync.")
           .addText((text) => text
             .setPlaceholder("vault/")
             .setValue(settings.localPrefix)
@@ -319,17 +328,6 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             }));
 
         new Setting(containerEl)
-          .setName("DeepSeek base URL")
-          .setDesc("OpenAI-compatible base_url. The plugin calls /chat/completions under this URL.")
-          .addText((text) => text
-            .setPlaceholder(DEFAULT_AUTO_MERGE_BASE_URL)
-            .setValue(settings.autoMergeEndpoint)
-            .onChange(async (value) => {
-              settings.autoMergeEndpoint = normalizeWorkerUrl(value);
-              await this.plugin.savePluginData();
-            }));
-
-        new Setting(containerEl)
           .setName("DeepSeek API key")
           .setDesc(`Stored in plugin data. Current value: ${maskToken(settings.autoMergeApiKey) || "not set"}`)
           .addText((text) => {
@@ -338,47 +336,46 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
               .setPlaceholder("API key")
               .setValue(settings.autoMergeApiKey)
               .onChange(async (value) => {
-                settings.autoMergeApiKey = value.trim();
-                await this.plugin.savePluginData();
-              });
-          });
+              settings.autoMergeApiKey = value.trim();
+              await this.plugin.savePluginData();
+            });
+          })
+          .addButton((button) => button
+            .setButtonText("Get API key")
+            .onClick(() => {
+              openExternal(DEEPSEEK_API_KEYS_URL);
+            }));
 
         new Setting(containerEl)
           .setName("Model")
-          .setDesc("DeepSeek model name for semantic conflict merges.")
-          .addText((text) => text
-            .setPlaceholder(DEFAULT_AUTO_MERGE_MODEL)
-            .setValue(settings.autoMergeModel)
-            .onChange(async (value) => {
-              settings.autoMergeModel = value.trim();
-              await this.plugin.savePluginData();
-            }));
-
-        new Setting(containerEl)
-          .setName("Maximum merge file size")
-          .setDesc("Conflicted files larger than this byte limit skip auto merge.")
-          .addText((text) => text
-            .setPlaceholder("204800")
-            .setValue(String(settings.autoMergeMaxFileBytes))
-            .onChange(async (value) => {
-              const parsed = Number(value.trim());
-              if (Number.isSafeInteger(parsed) && parsed > 0) {
-                settings.autoMergeMaxFileBytes = parsed;
+          .setDesc("Choose a DeepSeek model. Refresh uses your API key to list available models.")
+          .addDropdown((dropdown) => {
+            for (const model of modelOptions(settings.autoMergeModel, this.autoMergeModelOptions)) {
+              dropdown.addOption(model, model);
+            }
+            dropdown
+              .setValue(settings.autoMergeModel)
+              .onChange(async (value) => {
+                settings.autoMergeModel = value || DEFAULT_AUTO_MERGE_MODEL;
                 await this.plugin.savePluginData();
-              }
-            }));
-
-        new Setting(containerEl)
-          .setName("Apply confidence threshold")
-          .setDesc("Apply locally only writes results at or above this confidence. Suggest only ignores this.")
-          .addText((text) => text
-            .setPlaceholder("0.9")
-            .setValue(String(settings.autoMergeConfidenceThreshold))
-            .onChange(async (value) => {
-              const parsed = Number(value.trim());
-              if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
-                settings.autoMergeConfidenceThreshold = parsed;
+              });
+          })
+          .addButton((button) => button
+            .setButtonText("Refresh")
+            .onClick(async () => {
+              try {
+                const models = await listAutoMergeModels(settings);
+                this.autoMergeModelOptions = models.length > 0 ? models : [...DEFAULT_AUTO_MERGE_MODELS];
+                if (!this.autoMergeModelOptions.includes(settings.autoMergeModel)) {
+                  settings.autoMergeModel = this.autoMergeModelOptions.includes(DEFAULT_AUTO_MERGE_MODEL)
+                    ? DEFAULT_AUTO_MERGE_MODEL
+                    : this.autoMergeModelOptions[0];
+                }
                 await this.plugin.savePluginData();
+                new Notice(`Loaded ${this.autoMergeModelOptions.length} model(s).`);
+                this.display();
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to load models.");
               }
             }));
       }
@@ -459,4 +456,23 @@ function addPathPreview(lines: string[], label: string, paths: string[] | undefi
   if (!paths || paths.length === 0) return;
   lines.push(`${label}:`);
   for (const path of paths) lines.push(`- ${path}`);
+}
+
+function modelOptions(current: string, models: string[]): string[] {
+  return [...new Set([current || DEFAULT_AUTO_MERGE_MODEL, ...models, ...DEFAULT_AUTO_MERGE_MODELS])]
+    .filter((model) => model.trim().length > 0);
+}
+
+function generateSecretToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function copyToClipboard(value: string): Promise<void> {
+  await navigator.clipboard?.writeText(value);
+}
+
+function openExternal(url: string): void {
+  window.open(url, "_blank", "noopener");
 }

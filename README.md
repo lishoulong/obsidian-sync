@@ -67,9 +67,8 @@ On Obsidian mobile, VaultBridge Sync uses the Cloudflare Worker protocol and req
 
 - Worker URL, for example `https://vaultbridge.example.workers.dev`
 - `SYNC_TOKEN` configured on the Worker
-- Stable device ID, for example `fred-iphone`
 
-The plugin stores compact device state in Obsidian plugin data, not in the synced vault.
+The plugin generates and stores an internal per-device ID plus compact sync state in Obsidian plugin data, not in the synced vault. Users normally do not need to edit the device ID.
 
 `Test connection` checks the Worker health, authenticates with `SYNC_TOKEN`, and verifies that the self-hosted Worker can access its configured GitHub repository and branch.
 
@@ -85,7 +84,7 @@ On mobile, conflicts reported by the Worker are handled separately: the plugin k
 
 ### Auto Merge Conflict
 
-`Auto Merge Conflict` is an advanced Worker sync option for text conflicts. When enabled, the plugin sends the local and remote conflicted file contents to DeepSeek through its OpenAI-compatible API and asks the model to produce a semantic merge. Configure `DeepSeek base URL` as `https://api.deepseek.com`, enter a DeepSeek API key, and use a model such as `deepseek-v4-flash` or `deepseek-v4-pro`.
+`Auto Merge Conflict` is an advanced Worker sync option for text conflicts. When enabled, the plugin sends the local and remote conflicted file contents to DeepSeek through its OpenAI-compatible API and asks the model to produce a semantic merge. Enter a DeepSeek API key, then choose a model such as `deepseek-v4-flash` or `deepseek-v4-pro`. The DeepSeek base URL, merge file-size limit, and apply confidence threshold use built-in defaults.
 
 The default mode is `Suggest only`: the plugin creates an excluded sibling `.auto-merge-proposal-...` file, still writes the normal `.remote-conflict-...` copy, and stops before pushing. Review the proposal, merge anything you want into the original file, delete the conflict copy, then sync again.
 

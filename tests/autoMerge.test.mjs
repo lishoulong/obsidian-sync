@@ -78,6 +78,30 @@ test("Auto Merge keeps a full chat/completions endpoint compatible", async () =>
   assert.equal(requestedUrl, "https://api.deepseek.com/chat/completions");
 });
 
+test("Auto Merge lists DeepSeek-compatible models from base_url /models", async () => {
+  const modules = await buildTestModules();
+  const { listAutoMergeModels } = await import(pathToFileURL(modules.autoMerge).href);
+  let requestedUrl = "";
+  installFetch(async (url, init) => {
+    requestedUrl = url;
+    assert.equal(init.method, "GET");
+    assert.equal(init.headers.authorization, "Bearer deepseek-key");
+    return jsonResponse({
+      data: [
+        { id: "deepseek-v4-pro" },
+        { id: "deepseek-v4-flash" },
+        { id: "deepseek-v4-flash" },
+        { name: "ignored" }
+      ]
+    });
+  });
+
+  const models = await listAutoMergeModels(testSettings());
+
+  assert.equal(requestedUrl, "https://api.deepseek.com/models");
+  assert.deepEqual(models, ["deepseek-v4-flash", "deepseek-v4-pro"]);
+});
+
 test("Suggest mode writes an auto-merge proposal and preserves manual conflict flow", async () => {
   const modules = await buildTestModules();
   const { SyncEngine } = await import(pathToFileURL(modules.syncEngine).href);
