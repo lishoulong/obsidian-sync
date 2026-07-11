@@ -43,7 +43,46 @@ test("Auto Merge calls DeepSeek-compatible base_url /chat/completions", async ()
   assert.equal(calls[0].url, "https://api.deepseek.com/chat/completions");
   assert.equal(calls[0].body.model, "deepseek-v4-flash");
   assert.equal(calls[0].body.response_format.type, "json_object");
+  assert.match(calls[0].body.messages[0].content, /clean final file/);
+  assert.match(calls[0].body.messages[0].content, /no Git conflict markers/);
   assert.equal(result.mergedContent, "merged");
+});
+
+test("Auto Merge rejects model output that still contains conflict markers", async () => {
+  const modules = await buildTestModules();
+  const { requestAutoMerge } = await import(pathToFileURL(modules.autoMerge).href);
+  installFetch(async () => jsonResponse({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          status: "merged",
+          confidence: 0.99,
+          mergedContent: [
+            "# Note",
+            "<<<<<<< local",
+            "old",
+            "=======",
+            "new",
+            ">>>>>>> remote",
+            ""
+          ].join("\n"),
+          summary: "Kept both versions.",
+          warnings: [],
+          requiresReview: false
+        })
+      }
+    }]
+  }));
+
+  await assert.rejects(
+    () => requestAutoMerge({
+      settings: testSettings(),
+      path: "note.md",
+      localContent: "old",
+      remoteContent: "new"
+    }),
+    /unresolved conflict markers/
+  );
 });
 
 test("Auto Merge keeps a full chat/completions endpoint compatible", async () => {

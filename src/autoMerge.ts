@@ -101,7 +101,10 @@ export async function requestAutoMerge(input: {
               "Return only valid JSON.",
               "Never invent facts, tasks, links, dates, or note content.",
               "Preserve all non-conflicting information from both versions.",
-              "When the two versions disagree in a way that cannot be safely reconciled, keep both alternatives with clear inline conflict notes and set requiresReview true.",
+              "The mergedContent must be a clean final file, ready to save, with no Git conflict markers and no inline conflict comments.",
+              "Do not output <<<<<<<, =======, >>>>>>>, <!-- CONFLICT -->, or duplicated alternatives solely to avoid deciding.",
+              "When versions disagree, choose the most plausible merged value from context; if there is no better basis, prefer the remote version and mention the decision in summary or warnings.",
+              "If a decision is uncertain, still return a clean mergedContent, set requiresReview true, and explain the uncertainty in warnings.",
               "Preserve Markdown structure, YAML frontmatter, code fences, links, tags, and list formatting whenever possible."
             ].join(" ")
           },
@@ -112,7 +115,7 @@ export async function requestAutoMerge(input: {
               schema: {
                 status: "merged | needs_review | unsafe | unsupported",
                 confidence: "number from 0 to 1",
-                mergedContent: "string containing the full merged file content",
+                mergedContent: "string containing the full clean merged file content with no unresolved conflict markers",
                 summary: "short human-readable summary",
                 warnings: "array of strings",
                 requiresReview: "boolean"
@@ -161,8 +164,17 @@ export function normalizeModelResult(value: unknown): AutoMergeModelResult {
   if (!mergedContent.trim() && status !== "unsupported") {
     throw new VaultBridgeError("auto_merge_response", "Auto Merge response did not include merged content.");
   }
+  if (hasUnresolvedConflictMarkers(mergedContent)) {
+    throw new VaultBridgeError("auto_merge_response", "Auto Merge response still contained unresolved conflict markers.");
+  }
 
   return { status, confidence, mergedContent, summary, warnings, requiresReview };
+}
+
+export function hasUnresolvedConflictMarkers(content: string): boolean {
+  return /(^|\n)(<<<<<<<|=======|>>>>>>>)(?=\s|$)/.test(content)
+    || /<!--\s*CONFLICT\b/i.test(content)
+    || /\bCONFLICT:\s*(local|remote|ours|theirs)\b/i.test(content);
 }
 
 function normalizeStatus(value: unknown): AutoMergeStatus {

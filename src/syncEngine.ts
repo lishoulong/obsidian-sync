@@ -5,7 +5,7 @@ import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaul
 import { isExcluded } from "./vaultScanner";
 import { localManifestToRemote, remoteToLocalPath } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
-import { canAutoMergePath, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
+import { canAutoMergePath, hasUnresolvedConflictMarkers, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
 import {
   BlobEntry,
   DeviceState,
@@ -571,6 +571,7 @@ export class SyncEngine {
     const largerInputLength = Math.max(localContent.trim().length, remoteContent.trim().length);
     if (largerInputLength > 200 && merged.length < largerInputLength * 0.35) return false;
     if (merged.includes("```json") || merged.includes("\"mergedContent\"")) return false;
+    if (hasUnresolvedConflictMarkers(merged)) return false;
     return true;
   }
 
