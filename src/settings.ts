@@ -3,6 +3,8 @@ import type VaultBridgeSyncPlugin from "./main";
 import { DeviceState, VaultBridgePluginData, VaultBridgeSettings } from "./types";
 
 const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024;
+export const DEFAULT_AUTO_MERGE_BASE_URL = "https://api.deepseek.com";
+export const DEFAULT_AUTO_MERGE_MODEL = "deepseek-v4-flash";
 
 export const DEFAULT_EXCLUDE_PATTERNS = [
   ".git/",
@@ -11,7 +13,9 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
   ".obsidian/workspace",
   ".obsidian/cache/",
   ".obsidian/plugins/vaultbridge-sync/",
-  ".remote-conflict-"
+  ".remote-conflict-",
+  ".auto-merge-proposal-",
+  ".local-before-auto-merge-"
 ];
 
 export const DEFAULT_SETTINGS: VaultBridgeSettings = {
@@ -22,6 +26,13 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   remotePrefix: "vault/",
   maxFileBytes: DEFAULT_MAX_FILE_BYTES,
   excludePatterns: DEFAULT_EXCLUDE_PATTERNS,
+  autoMergeConflicts: false,
+  autoMergeMode: "suggest",
+  autoMergeEndpoint: DEFAULT_AUTO_MERGE_BASE_URL,
+  autoMergeApiKey: "",
+  autoMergeModel: DEFAULT_AUTO_MERGE_MODEL,
+  autoMergeMaxFileBytes: 200 * 1024,
+  autoMergeConfidenceThreshold: 0.9,
   desktopAutoGitPush: false,
   desktopAutoGitPushDelaySeconds: 60,
   desktopGitPullBeforePush: true,
@@ -281,6 +292,97 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             }
           }));
 
+      containerEl.createEl("h3", { text: "Auto Merge Conflict" });
+
+      new Setting(containerEl)
+        .setName("Auto Merge Conflict")
+        .setDesc("Advanced: uses a configured model service to generate a semantic merge for Worker conflicts. File contents are sent to that service.")
+        .addToggle((toggle) => toggle
+          .setValue(settings.autoMergeConflicts)
+          .onChange(async (value) => {
+            settings.autoMergeConflicts = value;
+            await this.plugin.savePluginData();
+            this.display();
+          }));
+
+      if (settings.autoMergeConflicts) {
+        new Setting(containerEl)
+          .setName("Merge mode")
+          .setDesc("Suggest only creates a proposal file. Apply locally writes high-confidence merges to the original file and continues sync.")
+          .addDropdown((dropdown) => dropdown
+            .addOption("suggest", "Suggest only")
+            .addOption("apply", "Apply locally")
+            .setValue(settings.autoMergeMode)
+            .onChange(async (value) => {
+              settings.autoMergeMode = value === "apply" ? "apply" : "suggest";
+              await this.plugin.savePluginData();
+            }));
+
+        new Setting(containerEl)
+          .setName("DeepSeek base URL")
+          .setDesc("OpenAI-compatible base_url. The plugin calls /chat/completions under this URL.")
+          .addText((text) => text
+            .setPlaceholder(DEFAULT_AUTO_MERGE_BASE_URL)
+            .setValue(settings.autoMergeEndpoint)
+            .onChange(async (value) => {
+              settings.autoMergeEndpoint = normalizeWorkerUrl(value);
+              await this.plugin.savePluginData();
+            }));
+
+        new Setting(containerEl)
+          .setName("DeepSeek API key")
+          .setDesc(`Stored in plugin data. Current value: ${maskToken(settings.autoMergeApiKey) || "not set"}`)
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text
+              .setPlaceholder("API key")
+              .setValue(settings.autoMergeApiKey)
+              .onChange(async (value) => {
+                settings.autoMergeApiKey = value.trim();
+                await this.plugin.savePluginData();
+              });
+          });
+
+        new Setting(containerEl)
+          .setName("Model")
+          .setDesc("DeepSeek model name for semantic conflict merges.")
+          .addText((text) => text
+            .setPlaceholder(DEFAULT_AUTO_MERGE_MODEL)
+            .setValue(settings.autoMergeModel)
+            .onChange(async (value) => {
+              settings.autoMergeModel = value.trim();
+              await this.plugin.savePluginData();
+            }));
+
+        new Setting(containerEl)
+          .setName("Maximum merge file size")
+          .setDesc("Conflicted files larger than this byte limit skip auto merge.")
+          .addText((text) => text
+            .setPlaceholder("204800")
+            .setValue(String(settings.autoMergeMaxFileBytes))
+            .onChange(async (value) => {
+              const parsed = Number(value.trim());
+              if (Number.isSafeInteger(parsed) && parsed > 0) {
+                settings.autoMergeMaxFileBytes = parsed;
+                await this.plugin.savePluginData();
+              }
+            }));
+
+        new Setting(containerEl)
+          .setName("Apply confidence threshold")
+          .setDesc("Apply locally only writes results at or above this confidence. Suggest only ignores this.")
+          .addText((text) => text
+            .setPlaceholder("0.9")
+            .setValue(String(settings.autoMergeConfidenceThreshold))
+            .onChange(async (value) => {
+              const parsed = Number(value.trim());
+              if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+                settings.autoMergeConfidenceThreshold = parsed;
+                await this.plugin.savePluginData();
+              }
+            }));
+      }
+
       new Setting(containerEl)
         .setName("Sync now")
         .setDesc("Runs the manual VaultBridge sync workflow.")
@@ -337,6 +439,11 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           addPathPreview(lines, "upload", diagnostics.uploadPaths);
           addPathPreview(lines, "deleteRemote", diagnostics.deleteRemotePaths);
           addPathPreview(lines, "conflict", diagnostics.conflictPaths);
+          addPathPreview(lines, "autoMerge", diagnostics.autoMergePaths);
+          if (diagnostics.autoMergeWarnings?.length) {
+            lines.push("autoMergeWarnings:");
+            for (const warning of diagnostics.autoMergeWarnings) lines.push(`- ${warning}`);
+          }
         }
         containerEl.createEl("h3", { text: "Last sync diagnostics" });
         containerEl.createEl("pre", {

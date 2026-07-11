@@ -57,6 +57,8 @@ export function isExcluded(path: string, patterns: string[]): boolean {
   if (path.startsWith(".git/") || path.startsWith(".vaultbridge/")) return true;
   if (path === ".DS_Store" || path.endsWith("/.DS_Store")) return true;
   if (path.includes(".remote-conflict-")) return true;
+  if (path.includes(".auto-merge-proposal-")) return true;
+  if (path.includes(".local-before-auto-merge-")) return true;
 
   return patterns.some((pattern) => {
     const value = pattern.trim();

@@ -12,6 +12,13 @@ export interface VaultBridgeSettings {
   remotePrefix: string;
   maxFileBytes: number;
   excludePatterns: string[];
+  autoMergeConflicts: boolean;
+  autoMergeMode: "suggest" | "apply";
+  autoMergeEndpoint: string;
+  autoMergeApiKey: string;
+  autoMergeModel: string;
+  autoMergeMaxFileBytes: number;
+  autoMergeConfidenceThreshold: number;
   desktopAutoGitPush: boolean;
   desktopAutoGitPushDelaySeconds: number;
   desktopGitPullBeforePush: boolean;
@@ -147,6 +154,8 @@ export interface SyncDiagnostics {
   uploadPaths?: string[];
   deleteRemotePaths?: string[];
   conflictPaths?: string[];
+  autoMergePaths?: string[];
+  autoMergeWarnings?: string[];
   requestIds?: string[];
   phase?: string;
 }

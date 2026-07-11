@@ -82,3 +82,11 @@ On Obsidian desktop, the plugin can commit and push local vault changes with the
 If Git reports a rebase, merge, or push conflict, the plugin records a pending desktop Git conflict, pauses automatic Git push, and leaves the Git working tree for manual resolution. After resolving the files, run the `Continue desktop Git conflict` command or use the settings button to continue the rebase/merge and push. It does not auto-merge conflicts.
 
 On mobile, conflicts reported by the Worker are handled separately: the plugin keeps the local file unchanged, writes the remote version as a sibling `.remote-conflict-...` file, and stops before pushing. After you merge the content and delete the conflict copy, the next sync treats the local file as the resolved version and pushes it instead of recreating the same conflict copy.
+
+### Auto Merge Conflict
+
+`Auto Merge Conflict` is an advanced Worker sync option for text conflicts. When enabled, the plugin sends the local and remote conflicted file contents to DeepSeek through its OpenAI-compatible API and asks the model to produce a semantic merge. Configure `DeepSeek base URL` as `https://api.deepseek.com`, enter a DeepSeek API key, and use a model such as `deepseek-v4-flash` or `deepseek-v4-pro`.
+
+The default mode is `Suggest only`: the plugin creates an excluded sibling `.auto-merge-proposal-...` file, still writes the normal `.remote-conflict-...` copy, and stops before pushing. Review the proposal, merge anything you want into the original file, delete the conflict copy, then sync again.
+
+`Apply locally` is stricter and only writes high-confidence model results back to the original file. Before writing, the plugin creates an excluded `.local-before-auto-merge-...` backup, verifies that the local file has not changed since the sync plan was created, records the conflict as resolved, re-plans, and continues sync. Unsupported files, large files, missing model settings, low confidence, or model warnings fall back to the normal manual conflict flow.

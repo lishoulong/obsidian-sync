@@ -5,6 +5,7 @@ import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaul
 import { isExcluded } from "./vaultScanner";
 import { localManifestToRemote, remoteToLocalPath } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
+import { canAutoMergePath, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
 import {
   BlobEntry,
   DeviceState,
@@ -70,9 +71,19 @@ export class SyncEngine {
     let uploaded = 0;
     let deletedRemote = 0;
     let conflictCopies: string[] = [];
+    let autoMergePaths: string[] = [];
 
     try {
-    const pullConflictState = await this.splitResolvedConflicts(pullPlan);
+    let pullConflictState = await this.splitResolvedConflicts(pullPlan);
+    if (pullConflictState.unresolved.length > 0) {
+      diagnostics.phase = "auto_merge_pull";
+      const autoMergeState = await this.tryAutoMergeConflicts(client, pullPlan, pullConflictState.unresolved, initialScan.hashes, diagnostics);
+      autoMergePaths = autoMergePaths.concat(autoMergeState.paths);
+      pullConflictState = {
+        resolved: pullConflictState.resolved.concat(autoMergeState.resolved),
+        unresolved: autoMergeState.unresolved
+      };
+    }
     if (pullConflictState.unresolved.length > 0) {
       diagnostics.phase = "conflict_pull";
       conflictCopies = await this.writeConflictCopies(client, pullPlan, pullConflictState.unresolved);
@@ -80,7 +91,7 @@ export class SyncEngine {
         status: "conflict",
         message: `${pullConflictState.unresolved.length} conflict(s) found. Review conflict copies before syncing again.`,
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pullConflictState.unresolved.length, unchanged: pullPlan.unchanged.length },
-        conflictPaths: conflictCopies,
+        conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
       }, false);
     }
@@ -93,8 +104,8 @@ export class SyncEngine {
 
     diagnostics.phase = "post_pull_scan";
     this.updateStatus("Re-scanning after pull...");
-    const postPullScan = await scanVault(this.vault, this.data.settings);
-    const postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
+    let postPullScan = await scanVault(this.vault, this.data.settings);
+    let postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     diagnostics.phase = "push_plan";
     let pushPlanBaseSha = resolvedConflicts.length > 0 ? pullPlan.remoteCommitSha : (baseSha || pullPlan.remoteCommitSha);
     let pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
@@ -104,10 +115,51 @@ export class SyncEngine {
     diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
 
     if (pushPlan.conflict.length > 0) {
-      const pushConflictState = await this.splitResolvedConflicts(pushPlan);
+      let pushConflictState = await this.splitResolvedConflicts(pushPlan);
+      if (pushConflictState.unresolved.length > 0) {
+        diagnostics.phase = "auto_merge_push";
+        const autoMergeState = await this.tryAutoMergeConflicts(client, pushPlan, pushConflictState.unresolved, postPullScan.hashes, diagnostics);
+        autoMergePaths = autoMergePaths.concat(autoMergeState.paths);
+        pushConflictState = {
+          resolved: pushConflictState.resolved.concat(autoMergeState.resolved),
+          unresolved: autoMergeState.unresolved
+        };
+        if (autoMergeState.applied > 0) {
+          diagnostics.phase = "post_auto_merge_scan";
+          postPullScan = await scanVault(this.vault, this.data.settings);
+          postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
+        }
+      }
       resolvedConflicts.push(...pushConflictState.resolved);
       if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
         diagnostics.phase = "push_plan_after_resolved_conflicts";
+        pushPlanBaseSha = pushPlan.remoteCommitSha;
+        pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
+        diagnostics.pushCounts = pushPlan.counts;
+        addRequestId(diagnostics, pushPlan.requestId);
+        diagnostics.uploadPaths = previewPaths(pushPlan.upload);
+        diagnostics.deleteRemotePaths = previewPaths(pushPlan.deleteRemote);
+      }
+    }
+
+    if (pushPlan.conflict.length > 0) {
+      let pushConflictState = await this.splitResolvedConflicts(pushPlan);
+      if (pushConflictState.unresolved.length > 0) {
+        diagnostics.phase = "auto_merge_push_retry";
+        const autoMergeState = await this.tryAutoMergeConflicts(client, pushPlan, pushConflictState.unresolved, postPullScan.hashes, diagnostics);
+        autoMergePaths = autoMergePaths.concat(autoMergeState.paths);
+        pushConflictState = {
+          resolved: pushConflictState.resolved.concat(autoMergeState.resolved),
+          unresolved: autoMergeState.unresolved
+        };
+        if (autoMergeState.applied > 0) {
+          diagnostics.phase = "post_auto_merge_retry_scan";
+          postPullScan = await scanVault(this.vault, this.data.settings);
+          postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
+        }
+      }
+      if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
+        diagnostics.phase = "push_plan_after_retry_resolved_conflicts";
         pushPlanBaseSha = pushPlan.remoteCommitSha;
         pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
         diagnostics.pushCounts = pushPlan.counts;
@@ -129,7 +181,7 @@ export class SyncEngine {
         status: "conflict",
         message: `${pushConflictState.unresolved.length} conflict(s) found after pull. Review conflict copies before syncing again.`,
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pushConflictState.unresolved.length, unchanged: pushPlan.unchanged.length },
-        conflictPaths: conflictCopies,
+        conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
       }, false);
     }
@@ -212,7 +264,7 @@ export class SyncEngine {
         status: "error",
         message: formatSyncError(error),
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
-        conflictPaths: conflictCopies,
+        conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
       }, false);
     }
@@ -328,6 +380,129 @@ export class SyncEngine {
     return paths;
   }
 
+  private async tryAutoMergeConflicts(
+    client: WorkerClient,
+    plan: SyncPlan,
+    conflicts: SyncPlanEntry[],
+    initialHashes: Map<string, FileMeta>,
+    diagnostics: SyncDiagnostics
+  ): Promise<{ resolved: SyncPlanEntry[]; unresolved: SyncPlanEntry[]; paths: string[]; applied: number }> {
+    const resolved: SyncPlanEntry[] = [];
+    const unresolved: SyncPlanEntry[] = [];
+    const paths: string[] = [];
+    let applied = 0;
+    this.data.pendingConflicts = this.data.pendingConflicts || {};
+
+    if (!this.data.settings.autoMergeConflicts) {
+      return { resolved, unresolved: conflicts, paths, applied };
+    }
+
+    const settingsWarning = validateAutoMergeSettings(this.data.settings);
+    if (settingsWarning) {
+      addAutoMergeWarning(diagnostics, settingsWarning);
+      return { resolved, unresolved: conflicts, paths, applied };
+    }
+
+    for (const entry of conflicts) {
+      const remotePath = requirePath(entry);
+      const path = this.remotePathOrSkip(remotePath);
+      if (!path) {
+        unresolved.push(entry);
+        continue;
+      }
+      if (!entry.remoteBlobSha) {
+        addAutoMergeWarning(diagnostics, `${path}: remote blob is unavailable; skipped Auto Merge.`);
+        unresolved.push(entry);
+        continue;
+      }
+      if (!canAutoMergePath(path)) {
+        addAutoMergeWarning(diagnostics, `${path}: unsupported file type for Auto Merge.`);
+        unresolved.push(entry);
+        continue;
+      }
+
+      const existingProposalPaths = this.findAutoMergeProposalsForPath(path);
+      if (existingProposalPaths.length > 0 && this.data.settings.autoMergeMode === "suggest") {
+        paths.push(...existingProposalPaths);
+        for (const proposalPath of existingProposalPaths) addAutoMergePath(diagnostics, proposalPath);
+        unresolved.push(entry);
+        continue;
+      }
+
+      const localFile = this.vault.getFileByPath(path);
+      const initial = initialHashes.get(path);
+      if (!localFile || !initial) {
+        addAutoMergeWarning(diagnostics, `${path}: local file is unavailable; skipped Auto Merge.`);
+        unresolved.push(entry);
+        continue;
+      }
+      if (initial.size > this.data.settings.autoMergeMaxFileBytes) {
+        addAutoMergeWarning(diagnostics, `${path}: local file exceeds Auto Merge size limit.`);
+        unresolved.push(entry);
+        continue;
+      }
+
+      try {
+        const localBytes = await this.vault.readBinary(localFile);
+        const localContent = decodeUtf8(localBytes, path);
+        const pulled = await client.pullFile(plan.sessionToken, remotePath, entry.remoteBlobSha);
+        addRequestId(diagnostics, pulled.requestId);
+        const remoteBytes = base64ToArrayBuffer(pulled.content);
+        const remoteHash = await sha256Hex(remoteBytes);
+        if (remoteBytes.byteLength !== pulled.size || remoteHash !== pulled.sha256) {
+          throw new VaultBridgeError("download_integrity", `${path} remote conflict download failed integrity checks.`);
+        }
+        if (remoteBytes.byteLength > this.data.settings.autoMergeMaxFileBytes) {
+          addAutoMergeWarning(diagnostics, `${path}: remote file exceeds Auto Merge size limit.`);
+          unresolved.push(entry);
+          continue;
+        }
+        const remoteContent = decodeUtf8(remoteBytes, path);
+        const result = await requestAutoMerge({
+          settings: this.data.settings,
+          path,
+          localContent,
+          remoteContent
+        });
+
+        const canApply = this.data.settings.autoMergeMode === "apply"
+          && this.canApplyAutoMergeResult(result, localContent, remoteContent);
+        if (canApply) {
+          await this.assertLocalUnchanged(path, initial);
+          const backupPath = await this.nextAutoMergeArtifactPath(path, "local-before-auto-merge");
+          await this.createNewFile(backupPath, localBytes);
+          await this.writeDownloadedFile(path, encodeUtf8(result.mergedContent));
+          this.data.pendingConflicts[remotePath] = {
+            path: remotePath,
+            localPath: path,
+            remoteCommitSha: plan.remoteCommitSha,
+            remoteBlobSha: entry.remoteBlobSha,
+            conflictPaths: [],
+            createdAt: new Date().toISOString()
+          };
+          paths.push(backupPath);
+          addAutoMergePath(diagnostics, backupPath);
+          addAutoMergeWarning(diagnostics, `${path}: Auto Merge applied (${formatConfidence(result.confidence)}). ${result.summary || "No summary returned."}`);
+          resolved.push(entry);
+          applied += 1;
+          continue;
+        }
+
+        const proposalPath = await this.nextAutoMergeArtifactPath(path, "auto-merge-proposal");
+        await this.createNewFile(proposalPath, encodeUtf8(formatAutoMergeProposal(path, result)));
+        paths.push(proposalPath);
+        addAutoMergePath(diagnostics, proposalPath);
+        addAutoMergeWarning(diagnostics, `${path}: Auto Merge proposal created (${result.status}, ${formatConfidence(result.confidence)}). ${result.summary || "No summary returned."}`);
+        unresolved.push(entry);
+      } catch (error) {
+        addAutoMergeWarning(diagnostics, `${path}: ${formatSyncError(error)}`);
+        unresolved.push(entry);
+      }
+    }
+
+    return { resolved, unresolved, paths, applied };
+  }
+
   private async splitResolvedConflicts(plan: SyncPlan): Promise<{ resolved: SyncPlanEntry[]; unresolved: SyncPlanEntry[] }> {
     const resolved: SyncPlanEntry[] = [];
     const unresolved: SyncPlanEntry[] = [];
@@ -367,17 +542,36 @@ export class SyncEngine {
   }
 
   private findConflictCopiesForPath(path: string): string[] {
+    return this.findSiblingArtifactsForPath(path, "remote-conflict");
+  }
+
+  private findAutoMergeProposalsForPath(path: string): string[] {
+    return this.findSiblingArtifactsForPath(path, "auto-merge-proposal");
+  }
+
+  private findSiblingArtifactsForPath(path: string, label: string): string[] {
     const slash = path.lastIndexOf("/");
     const folder = slash >= 0 ? path.slice(0, slash + 1) : "";
     const filename = slash >= 0 ? path.slice(slash + 1) : path;
     const dot = filename.lastIndexOf(".");
     const base = dot > 0 ? filename.slice(0, dot) : filename;
     const extension = dot > 0 ? filename.slice(dot) : "";
-    const prefix = `${folder}${base}.remote-conflict-`;
+    const prefix = `${folder}${base}.${label}-`;
 
     return this.vault.getFiles()
       .map((file) => file.path)
       .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(extension));
+  }
+
+  private canApplyAutoMergeResult(result: { status: string; confidence: number; mergedContent: string; requiresReview: boolean }, localContent: string, remoteContent: string): boolean {
+    if (result.status !== "merged" || result.requiresReview) return false;
+    if (result.confidence < this.data.settings.autoMergeConfidenceThreshold) return false;
+    const merged = result.mergedContent.trim();
+    if (!merged) return false;
+    const largerInputLength = Math.max(localContent.trim().length, remoteContent.trim().length);
+    if (largerInputLength > 200 && merged.length < largerInputLength * 0.35) return false;
+    if (merged.includes("```json") || merged.includes("\"mergedContent\"")) return false;
+    return true;
   }
 
   private clearPendingConflicts(): void {
@@ -484,6 +678,10 @@ export class SyncEngine {
   }
 
   private async nextConflictPath(path: string): Promise<string> {
+    return await this.nextAutoMergeArtifactPath(path, "remote-conflict");
+  }
+
+  private async nextAutoMergeArtifactPath(path: string, label: string): Promise<string> {
     const timestamp = formatTimestamp(new Date());
     const slash = path.lastIndexOf("/");
     const folder = slash >= 0 ? path.slice(0, slash + 1) : "";
@@ -494,7 +692,7 @@ export class SyncEngine {
 
     for (let index = 0; index < 1000; index++) {
       const suffix = index === 0 ? "" : `-${index}`;
-      const candidate = `${folder}${base}.remote-conflict-${timestamp}${suffix}${extension}`;
+      const candidate = `${folder}${base}.${label}-${timestamp}${suffix}${extension}`;
       if (!(await this.pathExists(candidate))) return candidate;
     }
     throw new VaultBridgeError("conflict_name_collision", `Unable to create a conflict filename for ${path}.`);
@@ -543,6 +741,56 @@ function addRequestId(diagnostics: SyncDiagnostics, requestId: string | undefine
   if (!requestId) return;
   diagnostics.requestIds = diagnostics.requestIds || [];
   if (!diagnostics.requestIds.includes(requestId)) diagnostics.requestIds.push(requestId);
+}
+
+function addAutoMergePath(diagnostics: SyncDiagnostics, path: string): void {
+  diagnostics.autoMergePaths = diagnostics.autoMergePaths || [];
+  if (!diagnostics.autoMergePaths.includes(path)) diagnostics.autoMergePaths.push(path);
+}
+
+function addAutoMergeWarning(diagnostics: SyncDiagnostics, warning: string): void {
+  diagnostics.autoMergeWarnings = diagnostics.autoMergeWarnings || [];
+  diagnostics.autoMergeWarnings.push(warning);
+}
+
+function decodeUtf8(content: ArrayBuffer, path: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    throw new VaultBridgeError("auto_merge_encoding", `${path} is not valid UTF-8 text.`);
+  }
+}
+
+function encodeUtf8(content: string): ArrayBuffer {
+  const bytes = new TextEncoder().encode(content);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function formatAutoMergeProposal(path: string, result: {
+  status: string;
+  confidence: number;
+  mergedContent: string;
+  summary: string;
+  warnings: string[];
+  requiresReview: boolean;
+}): string {
+  const warnings = result.warnings.length > 0 ? result.warnings.join("; ") : "none";
+  return [
+    "<!-- VaultBridge Auto Merge Proposal",
+    `Path: ${path}`,
+    `Status: ${result.status}`,
+    `Confidence: ${formatConfidence(result.confidence)}`,
+    `Requires review: ${result.requiresReview ? "yes" : "no"}`,
+    `Summary: ${result.summary || "none"}`,
+    `Warnings: ${warnings}`,
+    "-->",
+    "",
+    result.mergedContent
+  ].join("\n");
+}
+
+function formatConfidence(value: number): string {
+  return `${Math.round(value * 100)}% confidence`;
 }
 
 function wrapFileOperationError(operation: string, path: string, error: unknown): VaultBridgeError {

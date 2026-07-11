@@ -1,5 +1,16 @@
 import { Notice, Platform, Plugin } from "obsidian";
-import { createDefaultData, createInitialDeviceId, DEFAULT_SETTINGS, makeDeviceState, normalizeRemotePrefix, VaultBridgeSettingTab, validateRequiredSettings } from "./settings";
+import {
+  createDefaultData,
+  createInitialDeviceId,
+  DEFAULT_AUTO_MERGE_BASE_URL,
+  DEFAULT_AUTO_MERGE_MODEL,
+  DEFAULT_SETTINGS,
+  makeDeviceState,
+  normalizeRemotePrefix,
+  normalizeWorkerUrl,
+  VaultBridgeSettingTab,
+  validateRequiredSettings
+} from "./settings";
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
@@ -65,6 +76,12 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   async loadPluginData(): Promise<void> {
     const loaded = await this.loadData() as Partial<VaultBridgePluginData> | null;
     const settings = { ...DEFAULT_SETTINGS, ...(loaded?.settings || {}) };
+    if (!settings.autoMergeEndpoint || settings.autoMergeEndpoint === "https://api.openai.com/v1/chat/completions") {
+      settings.autoMergeEndpoint = DEFAULT_AUTO_MERGE_BASE_URL;
+    } else {
+      settings.autoMergeEndpoint = normalizeWorkerUrl(settings.autoMergeEndpoint);
+    }
+    if (!settings.autoMergeModel) settings.autoMergeModel = DEFAULT_AUTO_MERGE_MODEL;
     if (!settings.deviceId) settings.deviceId = createInitialDeviceId(this.app);
     if (!settings.localPrefix && normalizeRemotePrefix(settings.remotePrefix) === "vault/" && this.app.vault.getFolderByPath("vault")) {
       settings.localPrefix = "vault/";
