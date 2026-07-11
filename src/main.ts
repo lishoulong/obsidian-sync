@@ -1,5 +1,9 @@
 import { Notice, Platform, Plugin } from "obsidian";
 import {
+  requestAutoMerge,
+  validateAutoMergeSettings
+} from "./autoMerge";
+import {
   createDefaultData,
   createInitialDeviceId,
   DEFAULT_AUTO_MERGE_BASE_URL,
@@ -50,6 +54,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         void this.testConnection()
           .then(() => new Notice("VaultBridge Worker connection OK."))
           .catch((error) => new Notice(formatError(error), 10000));
+      }
+    });
+
+    this.addCommand({
+      id: "test-auto-merge-conflict",
+      name: "Test Auto Merge Conflict",
+      callback: () => {
+        void this.runAutoMergeTest();
       }
     });
 
@@ -109,6 +121,42 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       throw new Error("Worker is reachable but does not report VaultBridge Protocol v2.");
     }
     await client.setupCheck();
+  }
+
+  async runAutoMergeTest(): Promise<void> {
+    const settings = this.data.settings;
+    const warning = validateAutoMergeSettings(settings);
+    if (warning) {
+      new Notice(warning, 10000);
+      return;
+    }
+
+    new Notice("Auto Merge test started.");
+
+    try {
+      const result = await requestAutoMerge({
+        settings,
+        path: "vaultbridge-auto-merge-test.md",
+        localContent: [
+          "# VaultBridge test",
+          "",
+          "- Keep the local drafting note.",
+          "- Meeting time: 10:00",
+          ""
+        ].join("\n"),
+        remoteContent: [
+          "# VaultBridge test",
+          "",
+          "- Meeting time: 10:30",
+          "- Add the remote follow-up task.",
+          ""
+        ].join("\n")
+      });
+      await navigator.clipboard?.writeText(result.mergedContent);
+      new Notice(`Auto Merge test ${result.status} (${Math.round(result.confidence * 100)}%). Result copied.`, 12000);
+    } catch (error) {
+      new Notice(formatError(error), 12000);
+    }
   }
 
   async syncNow(): Promise<void> {

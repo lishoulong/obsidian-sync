@@ -1,6 +1,6 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgeSyncPlugin from "./main";
-import { listAutoMergeModels, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
+import { listAutoMergeModels } from "./autoMerge";
 import { DeviceState, VaultBridgePluginData, VaultBridgeSettings } from "./types";
 
 const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -394,36 +394,8 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           .setDesc("Runs a sample LLM merge without syncing or changing vault files. The merged result is copied to clipboard.")
           .addButton((button) => button
             .setButtonText("Test merge")
-            .onClick(async () => {
-              const warning = validateAutoMergeSettings(settings);
-              if (warning) {
-                new Notice(warning);
-                return;
-              }
-              try {
-                const result = await requestAutoMerge({
-                  settings,
-                  path: "vaultbridge-auto-merge-test.md",
-                  localContent: [
-                    "# VaultBridge test",
-                    "",
-                    "- Keep the local drafting note.",
-                    "- Meeting time: 10:00",
-                    ""
-                  ].join("\n"),
-                  remoteContent: [
-                    "# VaultBridge test",
-                    "",
-                    "- Meeting time: 10:30",
-                    "- Add the remote follow-up task.",
-                    ""
-                  ].join("\n")
-                });
-                await copyToClipboard(result.mergedContent);
-                new Notice(`Auto Merge test ${result.status} (${Math.round(result.confidence * 100)}%). Result copied.`);
-              } catch (error) {
-                new Notice(error instanceof Error ? error.message : "Auto Merge test failed.");
-              }
+            .onClick(() => {
+              void this.plugin.runAutoMergeTest();
             }));
       }
 
