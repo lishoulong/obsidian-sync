@@ -74,6 +74,8 @@ The plugin generates and stores an internal per-device ID plus compact sync stat
 
 For self-hosted use, deploy the VaultBridge Worker against your own GitHub repository, then copy the Worker URL and `SYNC_TOKEN` into this plugin. The plugin never stores a GitHub token.
 
+Cloudflare Worker secrets cannot be read back after they are set. The plugin's `New token` button creates a replacement token locally and copies it; you must update the Worker's `SYNC_TOKEN` secret to exactly the same value before sync will authenticate.
+
 ## Desktop Git autosync
 
 On Obsidian desktop, the plugin can commit and push local vault changes with the local `git` command. Automatic Git push is disabled by default. When enabled, vault file changes are debounced and pushed after the configured idle delay. Before pushing, the plugin can run `git pull --rebase --autostash`.

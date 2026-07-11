@@ -237,7 +237,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("SYNC_TOKEN")
-        .setDesc(`Shared secret that must match the Worker's SYNC_TOKEN environment variable. Current value: ${maskToken(settings.syncToken) || "not set"}`)
+        .setDesc(`Paste the same value configured in the Worker's SYNC_TOKEN secret. New token creates a local replacement; Cloudflare secrets cannot be read back. Current value: ${maskToken(settings.syncToken) || "not set"}`)
         .addText((text) => {
           text.inputEl.type = "password";
           text
@@ -249,12 +249,22 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             });
         })
         .addButton((button) => button
-          .setButtonText("Generate")
+          .setButtonText("Copy")
+          .onClick(async () => {
+            if (!settings.syncToken.trim()) {
+              new Notice("No SYNC_TOKEN is set.");
+              return;
+            }
+            await copyToClipboard(settings.syncToken);
+            new Notice("SYNC_TOKEN copied.");
+          }))
+        .addButton((button) => button
+          .setButtonText("New token")
           .onClick(async () => {
             settings.syncToken = generateSecretToken();
             await copyToClipboard(settings.syncToken);
             await this.plugin.savePluginData();
-            new Notice("SYNC_TOKEN generated and copied. Add the same value to your Cloudflare Worker secret.");
+            new Notice("New local SYNC_TOKEN generated and copied. Replace the Cloudflare Worker secret with this exact value.");
             this.display();
           }))
         .addButton((button) => button
