@@ -27,6 +27,8 @@ interface ModelsResponse {
 
 const SUPPORTED_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
 const REQUEST_TIMEOUT_MS = 120000;
+const MAX_AUTO_MERGE_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [0, 1000];
 
 export function canAutoMergePath(path: string): boolean {
   return SUPPORTED_EXTENSIONS.has(extensionOf(path).toLowerCase());
@@ -74,6 +76,28 @@ export async function listAutoMergeModels(settings: VaultBridgeSettings): Promis
 }
 
 export async function requestAutoMerge(input: {
+  settings: VaultBridgeSettings;
+  path: string;
+  localContent: string;
+  remoteContent: string;
+}): Promise<AutoMergeModelResult> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_AUTO_MERGE_ATTEMPTS; attempt += 1) {
+    try {
+      return await requestAutoMergeOnce(input);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_AUTO_MERGE_ATTEMPTS || !isRetryableAutoMergeError(error)) {
+        throw withAttemptContext(error, attempt);
+      }
+      await sleep(RETRY_DELAYS_MS[attempt - 1] || 0);
+    }
+  }
+
+  throw withAttemptContext(lastError, MAX_AUTO_MERGE_ATTEMPTS);
+}
+
+async function requestAutoMergeOnce(input: {
   settings: VaultBridgeSettings;
   path: string;
   localContent: string;
@@ -130,6 +154,9 @@ export async function requestAutoMerge(input: {
       signal: controller.signal
     });
   } catch (error) {
+    if (isAbortError(error)) {
+      throw new VaultBridgeError("auto_merge_timeout", `Auto Merge request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)} seconds.`);
+    }
     const message = error instanceof Error ? error.message : "Network request failed.";
     throw new VaultBridgeError("auto_merge_network", `Auto Merge request failed: ${message}`);
   } finally {
@@ -138,7 +165,8 @@ export async function requestAutoMerge(input: {
 
   const text = await response.text();
   if (response.status < 200 || response.status >= 300) {
-    throw new VaultBridgeError("auto_merge_http", `Auto Merge request failed with ${response.status}: ${sanitizeError(text)}`);
+    const code = isRetryableHttpStatus(response.status) ? "auto_merge_retryable_http" : "auto_merge_http";
+    throw new VaultBridgeError(code, `Auto Merge request failed with ${response.status}: ${sanitizeError(text)}`);
   }
 
   const parsed = parseJson(text) as ChatCompletionResponse;
@@ -146,6 +174,34 @@ export async function requestAutoMerge(input: {
   if (!content) throw new VaultBridgeError("auto_merge_response", "Auto Merge response did not include message content.");
 
   return normalizeModelResult(parseJson(content));
+}
+
+function isRetryableAutoMergeError(error: unknown): boolean {
+  if (!(error instanceof VaultBridgeError)) return false;
+  return error.code === "auto_merge_timeout"
+    || error.code === "auto_merge_network"
+    || error.code === "auto_merge_retryable_http";
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError";
+}
+
+function withAttemptContext(error: unknown, attempts: number): unknown {
+  if (attempts <= 1) return error;
+  if (error instanceof VaultBridgeError) {
+    return new VaultBridgeError(error.code, `${error.message} after ${attempts} attempts.`);
+  }
+  if (error instanceof Error) return new Error(`${error.message} after ${attempts} attempts.`);
+  return error;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 export function normalizeModelResult(value: unknown): AutoMergeModelResult {

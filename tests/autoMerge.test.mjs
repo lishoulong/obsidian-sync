@@ -85,6 +85,61 @@ test("Auto Merge rejects model output that still contains conflict markers", asy
   );
 });
 
+test("Auto Merge retries transient model failures", async () => {
+  const modules = await buildTestModules();
+  const { requestAutoMerge } = await import(pathToFileURL(modules.autoMerge).href);
+  let calls = 0;
+  installFetch(async () => {
+    calls += 1;
+    if (calls === 1) return jsonResponse({ error: "temporarily unavailable" }, 503);
+    return jsonResponse({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            status: "merged",
+            confidence: 0.96,
+            mergedContent: "merged after retry",
+            summary: "ok",
+            warnings: [],
+            requiresReview: false
+          })
+        }
+      }]
+    });
+  });
+
+  const result = await requestAutoMerge({
+    settings: testSettings(),
+    path: "note.md",
+    localContent: "local",
+    remoteContent: "remote"
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.mergedContent, "merged after retry");
+});
+
+test("Auto Merge does not retry non-retryable auth failures", async () => {
+  const modules = await buildTestModules();
+  const { requestAutoMerge } = await import(pathToFileURL(modules.autoMerge).href);
+  let calls = 0;
+  installFetch(async () => {
+    calls += 1;
+    return jsonResponse({ error: "unauthorized" }, 401);
+  });
+
+  await assert.rejects(
+    () => requestAutoMerge({
+      settings: testSettings(),
+      path: "note.md",
+      localContent: "local",
+      remoteContent: "remote"
+    }),
+    /401/
+  );
+  assert.equal(calls, 1);
+});
+
 test("Auto Merge keeps a full chat/completions endpoint compatible", async () => {
   const modules = await buildTestModules();
   const { requestAutoMerge } = await import(pathToFileURL(modules.autoMerge).href);
@@ -293,6 +348,48 @@ test("Apply mode falls back to manual conflict when confidence is low", async ()
   assert.equal(fetchLog.commitCalls, 0);
 });
 
+test("Apply mode falls back to manual conflict when Auto Merge retries are exhausted", async () => {
+  const modules = await buildTestModules();
+  const { SyncEngine } = await import(pathToFileURL(modules.syncEngine).href);
+  const vault = new MemoryVault({ "note.md": "local\n" });
+  const fetchLog = installSyncFetch({
+    plans: [
+      makePlan({
+        remoteCommitSha: "remote-4",
+        sessionToken: "session-1",
+        conflict: [{ path: "note.md", remoteBlobSha: "remote-blob" }]
+      })
+    ],
+    remoteFiles: {
+      "note.md": "remote\n"
+    },
+    modelStatus: 503
+  });
+  const data = testData({ autoMergeMode: "apply" });
+
+  const result = await new SyncEngine({
+    vault,
+    fileManager: {},
+    data,
+    saveData: async (next) => {
+      data.settings = next.settings;
+      data.deviceState = next.deviceState;
+      data.lastResult = next.lastResult;
+      data.pendingConflicts = next.pendingConflicts;
+    },
+    updateStatus: () => {}
+  }).syncNow();
+
+  assert.equal(result.status, "conflict");
+  assert.equal(vault.readText("note.md"), "local\n");
+  assert.ok(vault.paths().some((item) => item.includes(".remote-conflict-")));
+  assert.ok(!vault.paths().some((item) => item.includes(".local-before-auto-merge-")));
+  assert.ok(!vault.paths().some((item) => item.includes(".auto-merge-proposal-")));
+  assert.equal(fetchLog.modelCalls, 3);
+  assert.equal(fetchLog.commitCalls, 0);
+  assert.match(data.lastResult.diagnostics.autoMergeWarnings.join("\n"), /after 3 attempts/);
+});
+
 async function buildTestModules() {
   const outdir = path.join(tmpdir(), `vaultbridge-tests-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await mkdir(outdir, { recursive: true });
@@ -419,9 +516,9 @@ class MemoryVault {
   }
 }
 
-function installSyncFetch({ plans, remoteFiles, modelResult }) {
+function installSyncFetch({ plans, remoteFiles, modelResult, modelStatus = 200 }) {
   let syncCheckCalls = 0;
-  const log = { blobCalls: 0, commitCalls: 0 };
+  const log = { blobCalls: 0, commitCalls: 0, modelCalls: 0 };
   installFetch(async (url, init) => {
     const body = init.body ? JSON.parse(init.body) : {};
     if (url === "https://worker.test/v2/sync/check") {
@@ -451,6 +548,8 @@ function installSyncFetch({ plans, remoteFiles, modelResult }) {
       });
     }
     if (url === "https://api.deepseek.com/chat/completions") {
+      log.modelCalls += 1;
+      if (modelStatus !== 200) return jsonResponse({ error: "model unavailable" }, modelStatus);
       return jsonResponse({ choices: [{ message: { content: JSON.stringify(modelResult) } }] });
     }
     throw new Error(`Unexpected fetch URL: ${url}`);
