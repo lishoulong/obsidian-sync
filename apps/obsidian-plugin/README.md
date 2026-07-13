@@ -4,6 +4,16 @@ VaultBridge Sync is an Obsidian plugin that syncs the current vault through the 
 
 It is intentionally not a full Git plugin. The plugin reads and writes vault files through Obsidian APIs, while the Worker owns GitHub blob, tree, commit, and branch operations.
 
+## Install with BRAT
+
+Add the repository root to BRAT:
+
+```text
+https://github.com/lishoulong/obsidian-sync
+```
+
+Do not use the monorepo subdirectory URL ending in `/tree/main/apps/obsidian-plugin`. BRAT installs and updates the plugin from the `main.js`, `manifest.json`, and `styles.css` assets attached to the latest GitHub Release.
+
 ## Development
 
 Install dependencies:

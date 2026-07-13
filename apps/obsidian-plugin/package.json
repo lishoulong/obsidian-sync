@@ -1,6 +1,6 @@
 {
   "name": "@vaultbridge/obsidian-plugin",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "description": "Obsidian plugin for VaultBridge Worker Protocol v2 sync.",
   "private": true,
   "main": "main.js",

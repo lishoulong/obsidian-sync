@@ -41,7 +41,7 @@ cp wrangler.example.jsonc wrangler.jsonc
 ```jsonc
 {
   "name": "vaultbridge",
-  "main": "src/index.js",
+  "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "vars": {
     "GITHUB_OWNER": "your-github-user-or-org",
