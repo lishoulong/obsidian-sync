@@ -1,6 +1,6 @@
 {
   "name": "vaultbridge-sync",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "description": "Obsidian plugin for VaultBridge Worker Protocol v2 sync.",
   "main": "main.js",
   "scripts": {

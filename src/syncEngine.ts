@@ -5,7 +5,7 @@ import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaul
 import { isExcluded } from "./vaultScanner";
 import { localManifestToRemote, remoteToLocalPath } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
-import { canAutoMergePath, hasUnresolvedConflictMarkers, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
+import { canApplyAutoMergeResult, canAutoMergePath, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
 import {
   BlobEntry,
   DeviceState,
@@ -536,7 +536,7 @@ export class SyncEngine {
         });
 
         const canApply = this.data.settings.autoMergeMode === "apply"
-          && this.canApplyAutoMergeResult(result, localContent, remoteContent);
+          && canApplyAutoMergeResult(result, localContent, remoteContent, this.data.settings.autoMergeConfidenceThreshold);
         if (canApply) {
           await this.assertLocalUnchanged(path, initial);
           const backupPath = await this.nextAutoMergeArtifactPath(path, "local-before-auto-merge");
@@ -631,18 +631,6 @@ export class SyncEngine {
     return this.vault.getFiles()
       .map((file) => file.path)
       .filter((candidate) => candidate.startsWith(prefix) && candidate.endsWith(extension));
-  }
-
-  private canApplyAutoMergeResult(result: { status: string; confidence: number; mergedContent: string; requiresReview: boolean }, localContent: string, remoteContent: string): boolean {
-    if (result.status !== "merged" || result.requiresReview) return false;
-    if (result.confidence < this.data.settings.autoMergeConfidenceThreshold) return false;
-    const merged = result.mergedContent.trim();
-    if (!merged) return false;
-    const largerInputLength = Math.max(localContent.trim().length, remoteContent.trim().length);
-    if (largerInputLength > 200 && merged.length < largerInputLength * 0.35) return false;
-    if (merged.includes("```json") || merged.includes("\"mergedContent\"")) return false;
-    if (hasUnresolvedConflictMarkers(merged)) return false;
-    return true;
   }
 
   private countRelevantLocalDeletes(entries: SyncPlanEntry[]): number {

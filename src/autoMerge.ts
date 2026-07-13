@@ -227,6 +227,23 @@ export function normalizeModelResult(value: unknown): AutoMergeModelResult {
   return { status, confidence, mergedContent, summary, warnings, requiresReview };
 }
 
+export function canApplyAutoMergeResult(
+  result: AutoMergeModelResult,
+  localContent: string,
+  remoteContent: string,
+  confidenceThreshold: number
+): boolean {
+  if (result.status !== "merged" || result.requiresReview) return false;
+  if (result.confidence < confidenceThreshold) return false;
+  const merged = result.mergedContent.trim();
+  if (!merged) return false;
+  const largerInputLength = Math.max(localContent.trim().length, remoteContent.trim().length);
+  if (largerInputLength > 200 && merged.length < largerInputLength * 0.35) return false;
+  if (merged.includes("```json") || merged.includes("\"mergedContent\"")) return false;
+  if (hasUnresolvedConflictMarkers(merged)) return false;
+  return true;
+}
+
 export function hasUnresolvedConflictMarkers(content: string): boolean {
   return /(^|\n)(<<<<<<<|=======|>>>>>>>)(?=\s|$)/.test(content)
     || /<!--\s*CONFLICT\b/i.test(content)

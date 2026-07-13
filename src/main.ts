@@ -18,7 +18,7 @@ import {
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { SyncResult, VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
-import { continueDesktopGitConflict, desktopGitCommitPush, desktopGitPull, DesktopGitConflictError } from "./desktopGit";
+import { autoMergeDesktopGitConflict, continueDesktopGitConflict, desktopGitCommitPush, desktopGitPull, inspectDesktopGitConflict, DesktopGitConflictError } from "./desktopGit";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
@@ -126,6 +126,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "desktop-git-auto-merge-conflict",
+      name: "Auto merge desktop Git conflict",
+      callback: () => {
+        void this.autoMergeDesktopGitConflictNow();
+      }
+    });
+
     this.addSettingTab(new VaultBridgeSettingTab(this.app, this));
     this.registerDesktopAutoGitPushEvents();
     this.registerDesktopAutoGitPull();
@@ -164,6 +172,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     if (!this.desktopAutoGitPullEnabled() || this.gitPushing || this.gitPulling) return;
     this.gitPulling = true;
     this.lastGitPullAttemptAt = Date.now();
+    let conflictRecorded = false;
     try {
       const result = await desktopGitPull(this.app);
       if (result.pulled) new Notice(result.message, 5000);
@@ -172,6 +181,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         this.data.pendingDesktopGitConflict = error.conflict;
         await this.savePluginData();
         new Notice(`VaultBridge auto Git pull stopped: ${error.conflict.message}`, 12000);
+        conflictRecorded = true;
       } else {
         const message = formatError(error);
         if (/not a git repository|no such remote|no upstream|does not appear to be a git repository/i.test(message)) {
@@ -182,6 +192,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     } finally {
       this.gitPulling = false;
     }
+    if (conflictRecorded) this.maybeAutoMergeGitConflict();
   }
 
   private workerSyncAvailable(): boolean {
@@ -493,6 +504,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private async desktopAutoGitPush(): Promise<void> {
     if (this.gitPushing || !this.data.settings.desktopAutoGitPush || this.data.pendingDesktopGitConflict?.active) return;
     this.gitPushing = true;
+    let conflictRecorded = false;
     try {
       const result = await desktopGitCommitPush(this.app, this.data.settings, true);
       this.data.pendingDesktopGitConflict = null;
@@ -502,11 +514,79 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       if (error instanceof DesktopGitConflictError) {
         this.data.pendingDesktopGitConflict = error.conflict;
         await this.savePluginData();
+        conflictRecorded = true;
       }
       new Notice(`VaultBridge auto Git push stopped: ${formatError(error)}`, 12000);
     } finally {
       this.gitPushing = false;
     }
+    if (conflictRecorded) this.maybeAutoMergeGitConflict();
+  }
+
+  async autoMergeDesktopGitConflictNow(): Promise<boolean> {
+    if (this.gitPushing || this.gitPulling) {
+      new Notice("A VaultBridge Git operation is already running.");
+      return false;
+    }
+    if (!this.data.settings.autoMergeConflicts) {
+      new Notice("Enable Auto Merge Conflict in settings first.");
+      return false;
+    }
+
+    this.gitPushing = true;
+    new Notice("VaultBridge auto merging Git conflict...");
+    try {
+      for (let round = 0; round < 5; round++) {
+        try {
+          const outcome = await autoMergeDesktopGitConflict(this.app, this.data.settings);
+          if (outcome.skipped.length > 0) {
+            await this.refreshPendingGitConflict();
+            const preview = outcome.skipped.slice(0, 3).map((item) => `${item.path} (${item.reason})`).join("; ");
+            new Notice(`Auto merge left ${outcome.skipped.length} file(s) unresolved: ${preview}${outcome.skipped.length > 3 ? "; ..." : ""}`, 12000);
+            return false;
+          }
+          if (outcome.pushed) {
+            this.data.pendingDesktopGitConflict = null;
+            await this.savePluginData();
+            new Notice(`Auto merged ${outcome.merged.length} file(s). ${outcome.pushed.message}`, 8000);
+            return true;
+          }
+          await this.refreshPendingGitConflict();
+          return false;
+        } catch (error) {
+          if (error instanceof DesktopGitConflictError && error.conflict.paths.length > 0 && round < 4) {
+            this.data.pendingDesktopGitConflict = error.conflict;
+            await this.savePluginData();
+            continue;
+          }
+          if (error instanceof DesktopGitConflictError) {
+            this.data.pendingDesktopGitConflict = error.conflict;
+            await this.savePluginData();
+          }
+          new Notice(formatError(error), 12000);
+          return false;
+        }
+      }
+      return false;
+    } finally {
+      this.gitPushing = false;
+    }
+  }
+
+  private async refreshPendingGitConflict(): Promise<void> {
+    try {
+      const conflict = await inspectDesktopGitConflict(this.app);
+      this.data.pendingDesktopGitConflict = conflict.active ? conflict : null;
+      await this.savePluginData();
+    } catch {
+      // Leave the recorded conflict state untouched when inspection fails.
+    }
+  }
+
+  private maybeAutoMergeGitConflict(): void {
+    if (!this.data.settings.autoMergeConflicts || this.data.settings.autoMergeMode !== "apply") return;
+    if (!this.data.pendingDesktopGitConflict?.active || this.data.pendingDesktopGitConflict.paths.length === 0) return;
+    void this.autoMergeDesktopGitConflictNow();
   }
 
   async continueDesktopGitConflict(): Promise<void> {

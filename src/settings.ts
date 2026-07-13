@@ -220,7 +220,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       const pendingGitConflict = this.plugin.data.pendingDesktopGitConflict;
       if (pendingGitConflict?.active) {
-        new Setting(containerEl)
+        const conflictSetting = new Setting(containerEl)
           .setName("Desktop Git conflict")
           .setDesc(`${pendingGitConflict.message} Auto Git push is paused until this is resolved.`)
           .addButton((button) => button
@@ -228,6 +228,13 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             .onClick(() => {
             void this.plugin.continueDesktopGitConflict();
             }));
+        if (settings.autoMergeConflicts && pendingGitConflict.paths.length > 0) {
+          conflictSetting.addButton((button) => button
+            .setButtonText("Auto merge")
+            .onClick(() => {
+              void this.plugin.autoMergeDesktopGitConflictNow();
+            }));
+        }
       }
 
       new Setting(containerEl)

@@ -1,4 +1,5 @@
 import { App, Platform } from "obsidian";
+import { canApplyAutoMergeResult, canAutoMergePath, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
 import { normalizeLocalPrefix } from "./settings";
 import { DesktopGitConflictState, VaultBridgeSettings } from "./types";
 
@@ -124,6 +125,70 @@ export async function continueDesktopGitConflict(app: App, settings: VaultBridge
   return { commitSha, message: `Git conflict resolved and pushed at ${commitSha.slice(0, 12)}.` };
 }
 
+export interface DesktopGitAutoMergeOutcome {
+  merged: string[];
+  skipped: Array<{ path: string; reason: string }>;
+  pushed: DesktopGitResult | null;
+}
+
+export async function autoMergeDesktopGitConflict(app: App, settings: VaultBridgeSettings): Promise<DesktopGitAutoMergeOutcome> {
+  if (!Platform.isDesktopApp) {
+    throw new Error("Desktop Git auto merge is only available in the Obsidian desktop app.");
+  }
+  const settingsWarning = validateAutoMergeSettings(settings);
+  if (settingsWarning) throw new Error(settingsWarning);
+
+  const vaultPath = getVaultBasePath(app);
+  const repoRoot = (await git(["rev-parse", "--show-toplevel"], vaultPath)).stdout.trim();
+  const conflict = await inspectGitConflict(repoRoot);
+  if (!conflict.active) throw new Error("No desktop Git conflict is active.");
+
+  const merged: string[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
+
+  for (const path of conflict.paths) {
+    if (!canAutoMergePath(path)) {
+      skipped.push({ path, reason: "unsupported file type for Auto Merge" });
+      continue;
+    }
+
+    let ours: string;
+    let theirs: string;
+    try {
+      ours = (await git(["show", `:2:${path}`], repoRoot)).stdout;
+      theirs = (await git(["show", `:3:${path}`], repoRoot)).stdout;
+    } catch {
+      skipped.push({ path, reason: "one side of the conflict is missing (add/delete conflict)" });
+      continue;
+    }
+
+    if (byteLength(ours) > settings.autoMergeMaxFileBytes || byteLength(theirs) > settings.autoMergeMaxFileBytes) {
+      skipped.push({ path, reason: "exceeds the Auto Merge size limit" });
+      continue;
+    }
+
+    try {
+      const result = await requestAutoMerge({ settings, path, localContent: ours, remoteContent: theirs });
+      if (!canApplyAutoMergeResult(result, ours, theirs, settings.autoMergeConfidenceThreshold)) {
+        skipped.push({ path, reason: `model result not applied (${result.status}, ${Math.round(result.confidence * 100)}% confidence)` });
+        continue;
+      }
+      writeRepoFile(repoRoot, path, result.mergedContent);
+      await git(["add", "--", path], repoRoot);
+      merged.push(path);
+    } catch (error) {
+      skipped.push({ path, reason: error instanceof Error ? error.message : "Auto Merge request failed." });
+    }
+  }
+
+  let pushed: DesktopGitResult | null = null;
+  if (skipped.length === 0 && merged.length > 0) {
+    pushed = await continueDesktopGitConflict(app, settings);
+  }
+
+  return { merged, skipped, pushed };
+}
+
 export async function inspectDesktopGitConflict(app: App): Promise<DesktopGitConflictState> {
   if (!Platform.isDesktopApp) {
     throw new Error("Desktop Git conflict inspection is only available in the Obsidian desktop app.");
@@ -210,7 +275,15 @@ function getExecFile(): ExecFile {
   return nodeRequire("child_process").execFile;
 }
 
-function getFs(): { existsSync: (path: string) => boolean } {
-  const nodeRequire = Function("return require")() as (name: string) => { existsSync: (path: string) => boolean };
+function getFs(): { existsSync: (path: string) => boolean; writeFileSync: (path: string, content: string) => void } {
+  const nodeRequire = Function("return require")() as (name: string) => { existsSync: (path: string) => boolean; writeFileSync: (path: string, content: string) => void };
   return nodeRequire("fs");
+}
+
+function writeRepoFile(repoRoot: string, relativePath: string, content: string): void {
+  getFs().writeFileSync(`${repoRoot}/${relativePath}`, content);
+}
+
+function byteLength(content: string): number {
+  return new TextEncoder().encode(content).byteLength;
 }
