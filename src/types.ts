@@ -24,6 +24,8 @@ export interface VaultBridgeSettings {
   workerAutoSyncIntervalMinutes: number;
   desktopAutoGitPush: boolean;
   desktopAutoGitPushDelaySeconds: number;
+  desktopAutoGitPull: boolean;
+  desktopAutoGitPullIntervalMinutes: number;
   desktopGitPullBeforePush: boolean;
   desktopGitCommitMessagePrefix: string;
   desktopWorkerSyncEnabled: boolean;

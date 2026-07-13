@@ -18,7 +18,7 @@ import {
 import { SyncEngine, showResultNotice } from "./syncEngine";
 import { SyncResult, VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
-import { continueDesktopGitConflict, desktopGitCommitPush, DesktopGitConflictError } from "./desktopGit";
+import { continueDesktopGitConflict, desktopGitCommitPush, desktopGitPull, DesktopGitConflictError } from "./desktopGit";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
@@ -31,6 +31,9 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private lastWorkerSyncAttemptAt = 0;
   private lastAutoConflictSignature = "";
   private lastAutoErrorMessage = "";
+  private gitPulling = false;
+  private lastGitPullAttemptAt = 0;
+  private autoGitPullDisabledForSession = false;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -98,6 +101,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "desktop-git-pull",
+      name: "Desktop Git pull",
+      callback: () => {
+        void this.desktopGitPullNow();
+      }
+    });
+
+    this.addCommand({
       id: "desktop-git-continue-conflict",
       name: "Continue desktop Git conflict",
       callback: () => {
@@ -107,7 +118,60 @@ export default class VaultBridgeSyncPlugin extends Plugin {
 
     this.addSettingTab(new VaultBridgeSettingTab(this.app, this));
     this.registerDesktopAutoGitPushEvents();
+    this.registerDesktopAutoGitPull();
     this.registerWorkerAutoSync();
+  }
+
+  private desktopAutoGitPullEnabled(): boolean {
+    return Platform.isDesktopApp
+      && this.data.settings.desktopAutoGitPull
+      && !this.autoGitPullDisabledForSession
+      && !this.data.pendingDesktopGitConflict?.active;
+  }
+
+  private registerDesktopAutoGitPull(): void {
+    if (!Platform.isDesktopApp) return;
+
+    this.app.workspace.onLayoutReady(() => {
+      if (this.desktopAutoGitPullEnabled()) void this.autoDesktopGitPull();
+    });
+
+    this.registerDomEvent(window, "focus", () => {
+      if (!this.desktopAutoGitPullEnabled()) return;
+      if (Date.now() - this.lastGitPullAttemptAt < 60 * 1000) return;
+      void this.autoDesktopGitPull();
+    });
+
+    this.registerInterval(window.setInterval(() => {
+      const intervalMinutes = this.data.settings.desktopAutoGitPullIntervalMinutes;
+      if (!this.desktopAutoGitPullEnabled() || intervalMinutes <= 0) return;
+      if (Date.now() - this.lastGitPullAttemptAt < intervalMinutes * 60 * 1000) return;
+      void this.autoDesktopGitPull();
+    }, 60 * 1000));
+  }
+
+  private async autoDesktopGitPull(): Promise<void> {
+    if (!this.desktopAutoGitPullEnabled() || this.gitPushing || this.gitPulling) return;
+    this.gitPulling = true;
+    this.lastGitPullAttemptAt = Date.now();
+    try {
+      const result = await desktopGitPull(this.app);
+      if (result.pulled) new Notice(result.message, 5000);
+    } catch (error) {
+      if (error instanceof DesktopGitConflictError) {
+        this.data.pendingDesktopGitConflict = error.conflict;
+        await this.savePluginData();
+        new Notice(`VaultBridge auto Git pull stopped: ${error.conflict.message}`, 12000);
+      } else {
+        const message = formatError(error);
+        if (/not a git repository|no such remote|no upstream|does not appear to be a git repository/i.test(message)) {
+          this.autoGitPullDisabledForSession = true;
+        }
+        console.error("VaultBridge auto Git pull failed:", message);
+      }
+    } finally {
+      this.gitPulling = false;
+    }
   }
 
   private workerSyncAvailable(): boolean {
@@ -371,6 +435,27 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       new Notice(formatError(error), 12000);
     } finally {
       this.gitPushing = false;
+    }
+  }
+
+  async desktopGitPullNow(): Promise<void> {
+    if (this.gitPushing || this.gitPulling) {
+      new Notice("A VaultBridge Git operation is already running.");
+      return;
+    }
+    this.gitPulling = true;
+    this.lastGitPullAttemptAt = Date.now();
+    try {
+      const result = await desktopGitPull(this.app);
+      new Notice(result.message, 5000);
+    } catch (error) {
+      if (error instanceof DesktopGitConflictError) {
+        this.data.pendingDesktopGitConflict = error.conflict;
+        await this.savePluginData();
+      }
+      new Notice(formatError(error), 12000);
+    } finally {
+      this.gitPulling = false;
     }
   }
 

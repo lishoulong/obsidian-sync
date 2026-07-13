@@ -48,6 +48,8 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   workerAutoSyncIntervalMinutes: 30,
   desktopAutoGitPush: false,
   desktopAutoGitPushDelaySeconds: 60,
+  desktopAutoGitPull: true,
+  desktopAutoGitPullIntervalMinutes: 10,
   desktopGitPullBeforePush: true,
   desktopGitCommitMessagePrefix: "VaultBridge desktop autosync",
   desktopWorkerSyncEnabled: false
@@ -155,6 +157,30 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             const parsed = Number(value.trim());
             if (Number.isSafeInteger(parsed) && parsed >= 5) {
               settings.desktopAutoGitPushDelaySeconds = parsed;
+              await this.plugin.savePluginData();
+            }
+          }));
+
+      new Setting(containerEl)
+        .setName("Automatic desktop Git pull")
+        .setDesc("Pulls remote changes when Obsidian starts, when the window regains focus, and on the interval below. Uses git pull --rebase --autostash.")
+        .addToggle((toggle) => toggle
+          .setValue(settings.desktopAutoGitPull)
+          .onChange(async (value) => {
+            settings.desktopAutoGitPull = value;
+            await this.plugin.savePluginData();
+          }));
+
+      new Setting(containerEl)
+        .setName("Auto Git pull interval")
+        .setDesc("Minutes between periodic Git pulls. 0 disables the timer; startup and focus pulls still apply.")
+        .addText((text) => text
+          .setPlaceholder("10")
+          .setValue(String(settings.desktopAutoGitPullIntervalMinutes))
+          .onChange(async (value) => {
+            const parsed = Number(value.trim());
+            if (Number.isSafeInteger(parsed) && parsed >= 0) {
+              settings.desktopAutoGitPullIntervalMinutes = parsed;
               await this.plugin.savePluginData();
             }
           }));

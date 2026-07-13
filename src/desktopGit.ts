@@ -58,6 +58,38 @@ export async function desktopGitCommitPush(app: App, settings: VaultBridgeSettin
   return { commitSha, message: `${automatic ? "Auto Git push" : "Git push"} complete at ${commitSha.slice(0, 12)}.` };
 }
 
+export interface DesktopGitPullResult {
+  pulled: boolean;
+  commitSha: string | null;
+  message: string;
+}
+
+export async function desktopGitPull(app: App): Promise<DesktopGitPullResult> {
+  if (!Platform.isDesktopApp) {
+    throw new Error("Desktop Git pull is only available in the Obsidian desktop app.");
+  }
+
+  const vaultPath = getVaultBasePath(app);
+  const repoRoot = (await git(["rev-parse", "--show-toplevel"], vaultPath)).stdout.trim();
+  await assertNoGitConflict(repoRoot);
+
+  const before = (await git(["rev-parse", "HEAD"], repoRoot)).stdout.trim();
+  try {
+    await git(["pull", "--rebase", "--autostash"], repoRoot);
+  } catch (error) {
+    const conflict = await inspectGitConflict(repoRoot);
+    if (conflict.active) throw new DesktopGitConflictError(conflict);
+    throw error;
+  }
+  const after = (await git(["rev-parse", "HEAD"], repoRoot)).stdout.trim();
+  const pulled = before !== after;
+  return {
+    pulled,
+    commitSha: after,
+    message: pulled ? `Git pull complete at ${after.slice(0, 12)}.` : "Git already up to date."
+  };
+}
+
 export async function continueDesktopGitConflict(app: App, settings: VaultBridgeSettings): Promise<DesktopGitResult> {
   if (!Platform.isDesktopApp) {
     throw new Error("Desktop Git conflict continuation is only available in the Obsidian desktop app.");
