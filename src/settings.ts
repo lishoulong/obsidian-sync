@@ -490,6 +490,18 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             }));
       }
 
+      const pendingConflictCount = Object.keys(this.plugin.data.pendingConflicts || {}).length;
+      if (pendingConflictCount > 0) {
+        new Setting(containerEl)
+          .setName("Pending conflicts")
+          .setDesc(`${pendingConflictCount} conflict(s) are waiting for review.`)
+          .addButton((button) => button
+            .setButtonText("View")
+            .onClick(() => {
+              this.plugin.showPendingConflicts();
+            }));
+      }
+
       new Setting(containerEl)
         .setName("Sync now")
         .setDesc("Runs the manual VaultBridge sync workflow.")

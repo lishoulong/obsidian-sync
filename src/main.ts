@@ -19,6 +19,7 @@ import { SyncEngine, showResultNotice } from "./syncEngine";
 import { SyncResult, VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
 import { autoMergeDesktopGitConflict, continueDesktopGitConflict, desktopGitCommitPush, desktopGitPull, inspectDesktopGitConflict, DesktopGitConflictError } from "./desktopGit";
+import { ConflictListModal } from "./conflictModal";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
@@ -59,6 +60,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       name: "Sync now",
       callback: () => {
         void this.syncNow();
+      }
+    });
+
+    this.addCommand({
+      id: "show-pending-conflicts",
+      name: "Show pending conflicts",
+      callback: () => {
+        this.showPendingConflicts();
       }
     });
 
@@ -587,6 +596,10 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     if (!this.data.settings.autoMergeConflicts || this.data.settings.autoMergeMode !== "apply") return;
     if (!this.data.pendingDesktopGitConflict?.active || this.data.pendingDesktopGitConflict.paths.length === 0) return;
     void this.autoMergeDesktopGitConflictNow();
+  }
+
+  showPendingConflicts(): void {
+    new ConflictListModal(this.app, Object.values(this.data.pendingConflicts || {})).open();
   }
 
   async continueDesktopGitConflict(): Promise<void> {
