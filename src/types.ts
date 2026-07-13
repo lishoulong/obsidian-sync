@@ -19,6 +19,9 @@ export interface VaultBridgeSettings {
   autoMergeModel: string;
   autoMergeMaxFileBytes: number;
   autoMergeConfidenceThreshold: number;
+  workerAutoSync: boolean;
+  workerAutoSyncDelaySeconds: number;
+  workerAutoSyncIntervalMinutes: number;
   desktopAutoGitPush: boolean;
   desktopAutoGitPushDelaySeconds: number;
   desktopGitPullBeforePush: boolean;

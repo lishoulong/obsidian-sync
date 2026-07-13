@@ -27,6 +27,7 @@ export class SyncEngine {
   private saveData: (data: VaultBridgePluginData) => Promise<void>;
   private updateStatus: (message: string) => void;
   private isCancelled: () => boolean;
+  private quiet: boolean;
   private oversized = new Set<string>();
 
   constructor(input: {
@@ -36,6 +37,7 @@ export class SyncEngine {
     saveData: (data: VaultBridgePluginData) => Promise<void>;
     updateStatus: (message: string) => void;
     isCancelled?: () => boolean;
+    quiet?: boolean;
   }) {
     this.vault = input.vault;
     this.fileManager = input.fileManager;
@@ -43,6 +45,7 @@ export class SyncEngine {
     this.saveData = input.saveData;
     this.updateStatus = input.updateStatus;
     this.isCancelled = input.isCancelled || (() => false);
+    this.quiet = input.quiet === true;
   }
 
   private checkCancelled(): void {
@@ -64,9 +67,11 @@ export class SyncEngine {
     this.updateStatus("Checking remote changes...");
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
     const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
-    new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
-    if (initialScan.oversized.length > 0) {
-      new Notice(`VaultBridge skipped ${initialScan.oversized.length} file(s) larger than the sync size limit.`, 8000);
+    if (!this.quiet) {
+      new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
+      if (initialScan.oversized.length > 0) {
+        new Notice(`VaultBridge skipped ${initialScan.oversized.length} file(s) larger than the sync size limit.`, 8000);
+      }
     }
     if (this.looksLikePathMappingMismatch(pullPlan, initialScan)) {
       return await this.finish({

@@ -43,6 +43,9 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   autoMergeModel: DEFAULT_AUTO_MERGE_MODEL,
   autoMergeMaxFileBytes: 200 * 1024,
   autoMergeConfidenceThreshold: 0.9,
+  workerAutoSync: true,
+  workerAutoSyncDelaySeconds: 30,
+  workerAutoSyncIntervalMinutes: 30,
   desktopAutoGitPush: false,
   desktopAutoGitPushDelaySeconds: 60,
   desktopGitPullBeforePush: true,
@@ -297,6 +300,45 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
               await this.plugin.savePluginData();
             }));
       }
+
+      new Setting(containerEl)
+        .setName("Automatic sync")
+        .setDesc("Syncs automatically when the app opens, returns to the foreground, after edits, and on a timer.")
+        .addToggle((toggle) => toggle
+          .setValue(settings.workerAutoSync)
+          .onChange(async (value) => {
+            settings.workerAutoSync = value;
+            await this.plugin.savePluginData();
+            if (value) this.plugin.scheduleWorkerAutoSync();
+          }));
+
+      new Setting(containerEl)
+        .setName("Auto sync idle delay")
+        .setDesc("Seconds to wait after the last vault change before auto sync. Minimum 10.")
+        .addText((text) => text
+          .setPlaceholder("30")
+          .setValue(String(settings.workerAutoSyncDelaySeconds))
+          .onChange(async (value) => {
+            const parsed = Number(value.trim());
+            if (Number.isSafeInteger(parsed) && parsed >= 10) {
+              settings.workerAutoSyncDelaySeconds = parsed;
+              await this.plugin.savePluginData();
+            }
+          }));
+
+      new Setting(containerEl)
+        .setName("Auto sync interval")
+        .setDesc("Minutes between periodic background syncs. 0 disables the timer; other auto sync triggers still apply.")
+        .addText((text) => text
+          .setPlaceholder("30")
+          .setValue(String(settings.workerAutoSyncIntervalMinutes))
+          .onChange(async (value) => {
+            const parsed = Number(value.trim());
+            if (Number.isSafeInteger(parsed) && parsed >= 0) {
+              settings.workerAutoSyncIntervalMinutes = parsed;
+              await this.plugin.savePluginData();
+            }
+          }));
 
       new Setting(containerEl)
         .setName("Test connection")

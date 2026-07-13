@@ -16,7 +16,7 @@ import {
   validateRequiredSettings
 } from "./settings";
 import { SyncEngine, showResultNotice } from "./syncEngine";
-import { VaultBridgeError, VaultBridgePluginData } from "./types";
+import { SyncResult, VaultBridgeError, VaultBridgePluginData } from "./types";
 import { WorkerClient } from "./workerClient";
 import { continueDesktopGitConflict, desktopGitCommitPush, DesktopGitConflictError } from "./desktopGit";
 
@@ -27,6 +27,10 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private autoGitPushTimer: number | null = null;
   private cancelSyncRequested = false;
   private statusBarEl: HTMLElement | null = null;
+  private workerAutoSyncTimer: number | null = null;
+  private lastWorkerSyncAttemptAt = 0;
+  private lastAutoConflictSignature = "";
+  private lastAutoErrorMessage = "";
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -103,6 +107,64 @@ export default class VaultBridgeSyncPlugin extends Plugin {
 
     this.addSettingTab(new VaultBridgeSettingTab(this.app, this));
     this.registerDesktopAutoGitPushEvents();
+    this.registerWorkerAutoSync();
+  }
+
+  private workerSyncAvailable(): boolean {
+    return !Platform.isDesktopApp || this.data.settings.desktopWorkerSyncEnabled;
+  }
+
+  private workerAutoSyncEnabled(): boolean {
+    return this.workerSyncAvailable() && this.data.settings.workerAutoSync;
+  }
+
+  private registerWorkerAutoSync(): void {
+    this.app.workspace.onLayoutReady(() => {
+      if (this.workerAutoSyncEnabled()) void this.autoWorkerSync();
+    });
+
+    this.registerEvent(this.app.vault.on("create", () => this.scheduleWorkerAutoSync()));
+    this.registerEvent(this.app.vault.on("modify", () => this.scheduleWorkerAutoSync()));
+    this.registerEvent(this.app.vault.on("delete", () => this.scheduleWorkerAutoSync()));
+    this.registerEvent(this.app.vault.on("rename", () => this.scheduleWorkerAutoSync()));
+
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !this.workerAutoSyncEnabled()) return;
+      const minimumGapMs = Math.max(60, this.data.settings.workerAutoSyncDelaySeconds) * 1000;
+      if (Date.now() - this.lastWorkerSyncAttemptAt < minimumGapMs) return;
+      void this.autoWorkerSync();
+    });
+
+    this.registerInterval(window.setInterval(() => {
+      const intervalMinutes = this.data.settings.workerAutoSyncIntervalMinutes;
+      if (!this.workerAutoSyncEnabled() || intervalMinutes <= 0) return;
+      if (Date.now() - this.lastWorkerSyncAttemptAt < intervalMinutes * 60 * 1000) return;
+      void this.autoWorkerSync();
+    }, 60 * 1000));
+  }
+
+  scheduleWorkerAutoSync(): void {
+    if (!this.workerAutoSyncEnabled() || this.syncing) return;
+    if (this.workerAutoSyncTimer !== null) window.clearTimeout(this.workerAutoSyncTimer);
+    const delay = Math.max(10, this.data.settings.workerAutoSyncDelaySeconds) * 1000;
+    this.workerAutoSyncTimer = window.setTimeout(() => {
+      this.workerAutoSyncTimer = null;
+      void this.autoWorkerSync();
+    }, delay);
+  }
+
+  private async autoWorkerSync(): Promise<void> {
+    if (!this.workerAutoSyncEnabled()) return;
+    if (this.syncing) {
+      this.scheduleWorkerAutoSync();
+      return;
+    }
+    try {
+      validateRequiredSettings(this.data.settings);
+    } catch {
+      return;
+    }
+    await this.syncNow({ auto: true });
   }
 
   async loadPluginData(): Promise<void> {
@@ -180,29 +242,31 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     }
   }
 
-  async syncNow(): Promise<void> {
+  async syncNow(options: { auto?: boolean } = {}): Promise<void> {
+    const auto = options.auto === true;
     try {
       this.requireWorkerSyncEnabled();
     } catch (error) {
-      new Notice(formatError(error), 10000);
+      if (!auto) new Notice(formatError(error), 10000);
       return;
     }
 
     if (this.syncing) {
-      new Notice("VaultBridge sync is already running.");
+      if (!auto) new Notice("VaultBridge sync is already running.");
       return;
     }
 
     try {
       validateRequiredSettings(this.data.settings);
     } catch (error) {
-      new Notice(formatError(error), 10000);
+      if (!auto) new Notice(formatError(error), 10000);
       return;
     }
 
     this.syncing = true;
     this.cancelSyncRequested = false;
-    const progress = new SyncProgressReporter(this.statusBarEl);
+    this.lastWorkerSyncAttemptAt = Date.now();
+    const progress = auto ? null : new SyncProgressReporter(this.statusBarEl);
 
     try {
       const engine = new SyncEngine({
@@ -213,11 +277,16 @@ export default class VaultBridgeSyncPlugin extends Plugin {
           this.data = data;
           await this.savePluginData();
         },
-        updateStatus: (message) => progress.update(message),
-        isCancelled: () => this.cancelSyncRequested
+        updateStatus: (message) => {
+          if (progress) progress.update(message);
+          else this.statusBarEl?.setText(`VaultBridge: ${message}`);
+        },
+        isCancelled: () => this.cancelSyncRequested,
+        quiet: auto
       });
       const result = await engine.syncNow();
-      showResultNotice(result);
+      if (auto) this.notifyAutoResult(result);
+      else showResultNotice(result);
     } catch (error) {
       const message = formatError(error);
       this.data.lastResult = {
@@ -233,12 +302,37 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         completedAt: new Date().toISOString()
       };
       await this.savePluginData();
-      new Notice(message, 12000);
+      if (!auto || message !== this.lastAutoErrorMessage) new Notice(message, 12000);
+      if (auto) this.lastAutoErrorMessage = message;
     } finally {
       this.syncing = false;
       this.cancelSyncRequested = false;
-      progress.done();
+      progress?.done();
       this.updateStatusBarIdle();
+    }
+  }
+
+  private notifyAutoResult(result: SyncResult): void {
+    if (result.status === "success") {
+      this.lastAutoConflictSignature = "";
+      this.lastAutoErrorMessage = "";
+      const changed = result.counts.downloaded + result.counts.uploaded + result.counts.deletedLocal + result.counts.deletedRemote;
+      if (changed > 0) {
+        new Notice(`VaultBridge auto sync: down ${result.counts.downloaded}, up ${result.counts.uploaded}, del ${result.counts.deletedLocal + result.counts.deletedRemote}.`, 5000);
+      }
+      return;
+    }
+    if (result.status === "conflict") {
+      const signature = result.conflictPaths.join("|");
+      if (signature !== this.lastAutoConflictSignature) {
+        this.lastAutoConflictSignature = signature;
+        showResultNotice(result);
+      }
+      return;
+    }
+    if (result.message !== this.lastAutoErrorMessage) {
+      this.lastAutoErrorMessage = result.message;
+      showResultNotice(result);
     }
   }
 
