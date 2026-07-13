@@ -38,7 +38,7 @@ Existing desktop Git plugins do not directly solve the mobile problem because iO
 
 - A new Obsidian plugin codebase will be added under this repository.
 - The plugin will depend on the Obsidian plugin API and a TypeScript build toolchain.
-- The plugin will rely on the existing Cloudflare Worker deployment and Protocol v2 contract owned by the parent `vaultbridge-mvp-v0.3` project.
+- The plugin relies on the Cloudflare Worker in the same monorepo under `apps/worker` and the shared Protocol v2 contract in `docs/protocol-v2.md`.
 - The Worker API is not expected to require a breaking change for the initial plugin MVP.
 - Mobile behavior must avoid Node-only and Electron-only APIs so the plugin can run in Obsidian iOS.
 - The first release targets manual synchronization; background sync and full Git features are explicitly out of scope.

@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vaultbridge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "vars": {
+    // Either set GITHUB_REPOSITORY or set GITHUB_OWNER + GITHUB_REPO.
+    "GITHUB_REPOSITORY": "your-github-user/your-obsidian-repo",
+    "GITHUB_BRANCH": "main",
+    "MAX_FILE_BYTES": "20971520"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vaultbridge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "vars": {
+    "GITHUB_OWNER": "lishoulong",
+    "GITHUB_REPO": "obsidian-note",
+    "GITHUB_BRANCH": "main",
+    "MAX_FILE_BYTES": "20971520"
+  }
+}

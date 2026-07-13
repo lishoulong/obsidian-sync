@@ -9,24 +9,24 @@ It is intentionally not a full Git plugin. The plugin reads and writes vault fil
 Install dependencies:
 
 ```bash
-npm install
+pnpm install
 ```
 
 Build once:
 
 ```bash
-npm run build
+pnpm build
 ```
 
 Watch during development:
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ## Desktop Obsidian test install
 
-1. Build the plugin with `npm run build`.
+1. Build the plugin with `pnpm build`.
 2. Create a plugin folder in a test vault:
 
 ```text
@@ -73,7 +73,7 @@ The plugin generates and stores an internal per-device ID plus compact sync stat
 
 `Test connection` checks the Worker health, authenticates with `SYNC_TOKEN`, and verifies that the self-hosted Worker can access its configured GitHub repository and branch.
 
-For self-hosted use, deploy the VaultBridge Worker against your own GitHub repository, then copy the Worker URL and `SYNC_TOKEN` into this plugin. The plugin never stores a GitHub token.
+For self-hosted use, follow the [Worker deployment guide](../../docs/self-host.zh-CN.md), then copy the Worker URL and `SYNC_TOKEN` into this plugin. The plugin never stores a GitHub token.
 
 Cloudflare Worker secrets cannot be read back after they are set. The plugin's `New token` button creates a replacement token locally and copies it; you must update the Worker's `SYNC_TOKEN` secret to exactly the same value before sync will authenticate.
 

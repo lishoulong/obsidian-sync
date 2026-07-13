@@ -1,0 +1,31 @@
+name: Obsidian Plugin CI
+
+on:
+  pull_request:
+    paths:
+      - "apps/obsidian-plugin/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/plugin-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/obsidian-plugin/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/plugin-ci.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @vaultbridge/obsidian-plugin check
+      - run: pnpm --filter @vaultbridge/obsidian-plugin test
+      - run: pnpm --filter @vaultbridge/obsidian-plugin build

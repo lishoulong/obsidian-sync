@@ -1,0 +1,27 @@
+{
+  "name": "@vaultbridge/obsidian-plugin",
+  "version": "0.1.39",
+  "description": "Obsidian plugin for VaultBridge Worker Protocol v2 sync.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "check": "tsc -noEmit -skipLibCheck",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "obsidian",
+    "sync",
+    "vaultbridge"
+  ],
+  "author": "lishoulong",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.23.0",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.4.5"
+  }
+}

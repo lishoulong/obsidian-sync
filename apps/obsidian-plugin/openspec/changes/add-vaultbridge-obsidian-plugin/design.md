@@ -1,8 +1,8 @@
 ## Context
 
-The parent `vaultbridge-mvp-v0.3` project already provides a deployed Cloudflare Worker that implements VaultBridge Protocol v2. The Worker owns GitHub API access, three-way comparison, blob creation, commit creation, branch ref updates, and repository-level `.vaultbridge/manifest.json` maintenance.
+The same monorepo provides a Cloudflare Worker under `apps/worker` that implements VaultBridge Protocol v2. The Worker owns GitHub API access, three-way comparison, blob creation, commit creation, branch ref updates, and repository-level `.vaultbridge/manifest.json` maintenance.
 
-The new `obsidian-sync` repository is intended to host an Obsidian plugin that replaces the iOS Shortcut client. The plugin must run inside Obsidian Mobile, where native `git`, SSH agents, Node filesystem modules, and Electron APIs are not reliable options. The plugin should therefore behave as a VaultBridge client, not as a general Git client.
+The `apps/obsidian-plugin` application replaces the iOS Shortcut client. The plugin must run inside Obsidian Mobile, where native `git`, SSH agents, Node filesystem modules, and Electron APIs are not reliable options. The plugin should therefore behave as a VaultBridge client, not as a general Git client.
 
 Key constraints:
 
@@ -111,7 +111,7 @@ Alternatives considered:
 6. Validate on iOS Obsidian with a test vault and test GitHub repository.
 7. Switch the real vault only after conflict, download, upload, and deletion behavior have been manually verified.
 
-Rollback is operational rather than code-based: disable the plugin in Obsidian and continue using the existing Worker/Shortcut or desktop Git workflow. Since device state is plugin-local and conflicts are written as additional files, disabling the plugin should not remove user content.
+Rollback is operational rather than code-based: disable mobile Worker sync, use the desktop Git workflow where available, or reinstall a previous plugin release. Since device state is plugin-local and conflicts are written as additional files, disabling the plugin should not remove user content.
 
 ## Open Questions
 
