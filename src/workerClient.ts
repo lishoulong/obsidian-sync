@@ -18,32 +18,36 @@ interface WorkerErrorBody {
 }
 
 const REQUEST_TIMEOUT_MS = 120000;
+const DEFAULT_RETRY_DELAYS_MS = [1000, 2000, 4000];
+const RETRYABLE_HTTP_STATUS = new Set([429, 500, 502, 503, 504]);
 
 export class WorkerClient {
   private settings: VaultBridgeSettings;
+  private retryDelaysMs: number[];
 
-  constructor(settings: VaultBridgeSettings) {
+  constructor(settings: VaultBridgeSettings, retryDelaysMs: number[] = DEFAULT_RETRY_DELAYS_MS) {
     this.settings = settings;
+    this.retryDelaysMs = retryDelaysMs;
   }
 
   async health(): Promise<{ ok: boolean; service: string; protocol: number; version?: string }> {
-    return this.request("GET", "/health", null, false);
+    return this.request("GET", "/health", null, false, true);
   }
 
   async setupCheck(): Promise<{ ok: boolean; repository?: { fullName?: string; branch?: string; headCommitSha?: string } }> {
-    return this.request("GET", "/v2/setup/check", null, true);
+    return this.request("GET", "/v2/setup/check", null, true, true);
   }
 
   async syncCheck(deviceId: string, lastSyncedCommitSha: string | null, files: FileManifest): Promise<SyncPlan> {
-    return this.request("POST", "/v2/sync/check", { deviceId, lastSyncedCommitSha, files }, true);
+    return this.request("POST", "/v2/sync/check", { deviceId, lastSyncedCommitSha, files }, true, true);
   }
 
   async pullFile(sessionToken: string, path: string, blobSha: string): Promise<PullFileResponse> {
-    return this.request("POST", "/v2/pull/file", { sessionToken, path, blobSha }, true);
+    return this.request("POST", "/v2/pull/file", { sessionToken, path, blobSha }, true, true);
   }
 
   async createBlob(path: string, content: ArrayBuffer): Promise<BlobEntry> {
-    return this.request("POST", "/v2/blob", { path, encoding: "base64", content: arrayBufferToBase64(content) }, true);
+    return this.request("POST", "/v2/blob", { path, encoding: "base64", content: arrayBufferToBase64(content) }, true, true);
   }
 
   async commit(input: {
@@ -56,17 +60,34 @@ export class WorkerClient {
     };
     blobs: BlobEntry[];
   }): Promise<CommitResponse> {
-    return this.request("POST", "/v2/commit", input, true);
+    // Never retried: a commit that reached the Worker may have been applied
+    // even when the response is lost, and replaying it could double-commit.
+    return this.request("POST", "/v2/commit", input, true, false);
   }
 
-  private async request<T>(method: string, path: string, body: unknown, authenticated: boolean): Promise<T> {
+  private async request<T>(method: string, path: string, body: unknown, authenticated: boolean, retryable: boolean): Promise<T> {
+    const attempts = retryable ? this.retryDelaysMs.length + 1 : 1;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await delay(this.retryDelaysMs[attempt - 1]);
+      try {
+        return await this.requestOnce(method, path, body, authenticated);
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableError(error)) throw error;
+      }
+    }
+    throw lastError;
+  }
+
+  private async requestOnce<T>(method: string, path: string, body: unknown, authenticated: boolean): Promise<T> {
     const url = `${normalizeWorkerUrl(this.settings.workerUrl)}${path}`;
     const headers: Record<string, string> = {};
     if (authenticated) headers.authorization = `Bearer ${this.settings.syncToken}`;
 
     let response: Response;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       response = await fetch(url, {
         method,
@@ -81,18 +102,37 @@ export class WorkerClient {
       const message = error instanceof Error ? error.message : "Network request failed.";
       throw new VaultBridgeError("network_error", `${method} ${path} failed: ${message}`);
     } finally {
-      window.clearTimeout(timeout);
+      clearTimeout(timeout);
     }
 
     const text = await response.text();
     const parsed = parseJson(text);
     if (response.status < 200 || response.status >= 300) {
       const requestHint = parsed.requestId ? ` [requestId ${parsed.requestId}]` : "";
-      throw new VaultBridgeError(parsed.error || `http_${response.status}`, `${sanitizeError(parsed.message || `Worker returned ${response.status}`)}${requestHint}`);
+      const code = parsed.error || `http_${response.status}`;
+      const error = new VaultBridgeError(code, `${sanitizeError(parsed.message || `Worker returned ${response.status}`)}${requestHint}`);
+      if (RETRYABLE_HTTP_STATUS.has(response.status)) markRetryable(error);
+      throw error;
     }
 
     return parsed as T;
   }
+}
+
+const RETRYABLE_MARKER = Symbol("vaultbridge-retryable");
+
+function markRetryable(error: VaultBridgeError): void {
+  (error as VaultBridgeError & { [RETRYABLE_MARKER]?: boolean })[RETRYABLE_MARKER] = true;
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof VaultBridgeError)) return false;
+  if (error.code === "network_error") return true;
+  return (error as VaultBridgeError & { [RETRYABLE_MARKER]?: boolean })[RETRYABLE_MARKER] === true;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseJson(text: string): WorkerErrorBody & Record<string, unknown> {
