@@ -32,6 +32,13 @@ export interface VaultBridgePluginData {
   lastResult: SyncResult | null;
   pendingConflicts?: Record<string, PendingConflict>;
   pendingDesktopGitConflict?: DesktopGitConflictState | null;
+  hashCache?: Record<string, HashCacheEntry>;
+}
+
+export interface HashCacheEntry {
+  mtime: number;
+  size: number;
+  sha256: string;
 }
 
 export interface PendingConflict {

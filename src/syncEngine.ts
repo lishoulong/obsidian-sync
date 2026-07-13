@@ -47,7 +47,7 @@ export class SyncEngine {
 
     const client = new WorkerClient(this.data.settings);
     this.updateStatus("Scanning vault...");
-    const initialScan = await scanVault(this.vault, this.data.settings);
+    const initialScan = await this.scanVaultCached();
     const initialRemoteManifest = localManifestToRemote(initialScan.manifest, this.data.settings);
     const deviceId = this.data.settings.deviceId;
     const baseSha = stateCommitSha(this.data.deviceState);
@@ -104,7 +104,7 @@ export class SyncEngine {
 
     diagnostics.phase = "post_pull_scan";
     this.updateStatus("Re-scanning after pull...");
-    let postPullScan = await scanVault(this.vault, this.data.settings);
+    let postPullScan = await this.scanVaultCached();
     let postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     diagnostics.phase = "push_plan";
     let pushPlanBaseSha = resolvedConflicts.length > 0 ? pullPlan.remoteCommitSha : (baseSha || pullPlan.remoteCommitSha);
@@ -126,7 +126,7 @@ export class SyncEngine {
         };
         if (autoMergeState.applied > 0) {
           diagnostics.phase = "post_auto_merge_scan";
-          postPullScan = await scanVault(this.vault, this.data.settings);
+          postPullScan = await this.scanVaultCached();
           postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
         }
       }
@@ -154,7 +154,7 @@ export class SyncEngine {
         };
         if (autoMergeState.applied > 0) {
           diagnostics.phase = "post_auto_merge_retry_scan";
-          postPullScan = await scanVault(this.vault, this.data.settings);
+          postPullScan = await this.scanVaultCached();
           postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
         }
       }
@@ -268,6 +268,12 @@ export class SyncEngine {
         diagnostics
       }, false);
     }
+  }
+
+  private async scanVaultCached(): Promise<ScanResult> {
+    const scan = await scanVault(this.vault, this.data.settings, this.data.hashCache);
+    this.data.hashCache = scan.hashCache;
+    return scan;
   }
 
   private createDiagnostics(scan: ScanResult, baseCommitSha: string | null, plan: SyncPlan): SyncDiagnostics {

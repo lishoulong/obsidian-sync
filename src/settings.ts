@@ -56,7 +56,8 @@ export function createDefaultData(): VaultBridgePluginData {
     deviceState: null,
     lastResult: null,
     pendingConflicts: {},
-    pendingDesktopGitConflict: null
+    pendingDesktopGitConflict: null,
+    hashCache: {}
   };
 }
 

@@ -1,5 +1,5 @@
 import { normalizePath, TFile, Vault } from "obsidian";
-import { FileManifest, FileMeta, VaultBridgeError, VaultBridgeSettings } from "./types";
+import { FileManifest, FileMeta, HashCacheEntry, VaultBridgeError, VaultBridgeSettings } from "./types";
 import { normalizeLocalPrefix } from "./settings";
 
 export interface ScanResult {
@@ -7,6 +7,7 @@ export interface ScanResult {
   files: Map<string, TFile>;
   hashes: Map<string, FileMeta>;
   skipped: string[];
+  hashCache: Record<string, HashCacheEntry>;
 }
 
 function isWithinLocalPrefix(localPath: string, settings: VaultBridgeSettings): boolean {
@@ -15,11 +16,17 @@ function isWithinLocalPrefix(localPath: string, settings: VaultBridgeSettings): 
   return cleanVaultPath(localPath).startsWith(localPrefix);
 }
 
-export async function scanVault(vault: Vault, settings: VaultBridgeSettings): Promise<ScanResult> {
+export async function scanVault(
+  vault: Vault,
+  settings: VaultBridgeSettings,
+  previousHashCache?: Record<string, HashCacheEntry>
+): Promise<ScanResult> {
   const manifest: FileManifest = {};
   const files = new Map<string, TFile>();
   const hashes = new Map<string, FileMeta>();
   const skipped: string[] = [];
+  const hashCache: Record<string, HashCacheEntry> = {};
+  const previous = previousHashCache || {};
 
   for (const file of vault.getFiles()) {
     const path = cleanVaultPath(file.path);
@@ -35,14 +42,21 @@ export async function scanVault(vault: Vault, settings: VaultBridgeSettings): Pr
       throw new VaultBridgeError("file_too_large", `${path} exceeds the configured maximum file size.`);
     }
 
-    const bytes = await vault.readBinary(file);
-    const meta = { size: bytes.byteLength, sha256: await sha256Hex(bytes) };
+    const cached = previous[path];
+    let meta: FileMeta;
+    if (cached && cached.mtime === file.stat.mtime && cached.size === file.stat.size) {
+      meta = { size: cached.size, sha256: cached.sha256 };
+    } else {
+      const bytes = await vault.readBinary(file);
+      meta = { size: bytes.byteLength, sha256: await sha256Hex(bytes) };
+    }
+    hashCache[path] = { mtime: file.stat.mtime, size: meta.size, sha256: meta.sha256 };
     manifest[path] = meta;
     files.set(path, file);
     hashes.set(path, meta);
   }
 
-  return { manifest, files, hashes, skipped };
+  return { manifest, files, hashes, skipped, hashCache };
 }
 
 export function cleanVaultPath(input: string): string {
