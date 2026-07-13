@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   workerAutoSync: true,
   workerAutoSyncDelaySeconds: 30,
   workerAutoSyncIntervalMinutes: 30,
+  deleteGuardThreshold: 20,
   desktopAutoGitPush: false,
   desktopAutoGitPushDelaySeconds: 60,
   desktopAutoGitPull: true,
@@ -362,6 +363,20 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             const parsed = Number(value.trim());
             if (Number.isSafeInteger(parsed) && parsed >= 0) {
               settings.workerAutoSyncIntervalMinutes = parsed;
+              await this.plugin.savePluginData();
+            }
+          }));
+
+      new Setting(containerEl)
+        .setName("Delete guard threshold")
+        .setDesc("Stops sync when more than this many files would be deleted locally or remotely. Approve with the command palette when intended. 0 disables the guard.")
+        .addText((text) => text
+          .setPlaceholder("20")
+          .setValue(String(settings.deleteGuardThreshold))
+          .onChange(async (value) => {
+            const parsed = Number(value.trim());
+            if (Number.isSafeInteger(parsed) && parsed >= 0) {
+              settings.deleteGuardThreshold = parsed;
               await this.plugin.savePluginData();
             }
           }));

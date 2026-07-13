@@ -34,6 +34,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private gitPulling = false;
   private lastGitPullAttemptAt = 0;
   private autoGitPullDisabledForSession = false;
+  private largeDeleteApproved = false;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -58,6 +59,15 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       name: "Sync now",
       callback: () => {
         void this.syncNow();
+      }
+    });
+
+    this.addCommand({
+      id: "approve-large-delete",
+      name: "Approve large delete for next sync",
+      callback: () => {
+        this.largeDeleteApproved = true;
+        new Notice("VaultBridge will allow deletions above the guard threshold on the next sync.");
       }
     });
 
@@ -346,9 +356,11 @@ export default class VaultBridgeSyncPlugin extends Plugin {
           else this.statusBarEl?.setText(`VaultBridge: ${message}`);
         },
         isCancelled: () => this.cancelSyncRequested,
-        quiet: auto
+        quiet: auto,
+        largeDeleteApproved: this.largeDeleteApproved
       });
       const result = await engine.syncNow();
+      if (result.status === "success") this.largeDeleteApproved = false;
       if (auto) this.notifyAutoResult(result);
       else showResultNotice(result);
     } catch (error) {

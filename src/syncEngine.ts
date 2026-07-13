@@ -28,6 +28,7 @@ export class SyncEngine {
   private updateStatus: (message: string) => void;
   private isCancelled: () => boolean;
   private quiet: boolean;
+  private largeDeleteApproved: boolean;
   private oversized = new Set<string>();
 
   constructor(input: {
@@ -38,6 +39,7 @@ export class SyncEngine {
     updateStatus: (message: string) => void;
     isCancelled?: () => boolean;
     quiet?: boolean;
+    largeDeleteApproved?: boolean;
   }) {
     this.vault = input.vault;
     this.fileManager = input.fileManager;
@@ -46,6 +48,7 @@ export class SyncEngine {
     this.updateStatus = input.updateStatus;
     this.isCancelled = input.isCancelled || (() => false);
     this.quiet = input.quiet === true;
+    this.largeDeleteApproved = input.largeDeleteApproved === true;
   }
 
   private checkCancelled(): void {
@@ -112,6 +115,19 @@ export class SyncEngine {
       });
     }
     const resolvedConflicts = [...pullConflictState.resolved];
+
+    const guardThreshold = this.data.settings.deleteGuardThreshold;
+    const plannedLocalDeletes = this.countRelevantLocalDeletes(pullPlan.deleteLocal);
+    if (guardThreshold > 0 && !this.largeDeleteApproved && plannedLocalDeletes > guardThreshold) {
+      diagnostics.phase = "delete_guard_local";
+      return await this.finish({
+        status: "error",
+        message: `Sync stopped: ${plannedLocalDeletes} local file(s) would be deleted, above the delete guard threshold of ${guardThreshold}. If this is intended, run "Approve large delete for next sync" and sync again.`,
+        counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
+        conflictPaths: [],
+        diagnostics
+      });
+    }
 
     diagnostics.phase = "download";
     downloaded += await this.applyDownloads(client, pullPlan, initialScan.hashes, diagnostics);
@@ -223,6 +239,24 @@ export class SyncEngine {
       });
     }
 
+    diagnostics.phase = "prepare_commit";
+    const deleteRemote = pushPlan.deleteRemote.map((entry) => requirePath(entry))
+      .filter((remotePath) => {
+        const localPath = this.remotePathOrSkip(remotePath);
+        if (!localPath || this.oversized.has(localPath)) return false;
+        return !(localPath in postPullScan.manifest);
+      });
+    if (guardThreshold > 0 && !this.largeDeleteApproved && deleteRemote.length > guardThreshold) {
+      diagnostics.phase = "delete_guard_remote";
+      return await this.finish({
+        status: "error",
+        message: `Sync stopped: ${deleteRemote.length} remote file(s) would be deleted, above the delete guard threshold of ${guardThreshold}. If this is intended, run "Approve large delete for next sync" and sync again.`,
+        counts: { downloaded, uploaded: 0, deletedLocal, deletedRemote: 0, conflicts: 0, unchanged: pushPlan.unchanged.length },
+        conflictPaths: [],
+        diagnostics
+      });
+    }
+
     diagnostics.phase = "upload_blobs";
     this.updateStatus("Uploading local changes...");
     const uploadWork: Array<{ remotePath: string; file: TFile }> = [];
@@ -248,14 +282,6 @@ export class SyncEngine {
     for (const item of uploadWork) {
       upsert[item.remotePath] = postPullRemoteManifest[item.remotePath];
     }
-
-    diagnostics.phase = "prepare_commit";
-    const deleteRemote = pushPlan.deleteRemote.map((entry) => requirePath(entry))
-      .filter((remotePath) => {
-        const localPath = this.remotePathOrSkip(remotePath);
-        if (!localPath || this.oversized.has(localPath)) return false;
-        return !(localPath in postPullScan.manifest);
-      });
     deletedRemote = deleteRemote.length;
 
     diagnostics.phase = "commit";
@@ -617,6 +643,18 @@ export class SyncEngine {
     if (merged.includes("```json") || merged.includes("\"mergedContent\"")) return false;
     if (hasUnresolvedConflictMarkers(merged)) return false;
     return true;
+  }
+
+  private countRelevantLocalDeletes(entries: SyncPlanEntry[]): number {
+    let count = 0;
+    for (const entry of entries) {
+      const path = entry.path ? this.remotePathOrSkip(entry.path) : null;
+      if (!path) continue;
+      if (isExcluded(path, this.data.settings.excludePatterns)) continue;
+      if (this.oversized.has(path)) continue;
+      count += 1;
+    }
+    return count;
   }
 
   private clearPendingConflicts(): void {

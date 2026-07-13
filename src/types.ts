@@ -22,6 +22,7 @@ export interface VaultBridgeSettings {
   workerAutoSync: boolean;
   workerAutoSyncDelaySeconds: number;
   workerAutoSyncIntervalMinutes: number;
+  deleteGuardThreshold: number;
   desktopAutoGitPush: boolean;
   desktopAutoGitPushDelaySeconds: number;
   desktopAutoGitPull: boolean;
