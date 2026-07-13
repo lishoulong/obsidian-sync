@@ -7,6 +7,7 @@ export interface ScanResult {
   files: Map<string, TFile>;
   hashes: Map<string, FileMeta>;
   skipped: string[];
+  oversized: string[];
   hashCache: Record<string, HashCacheEntry>;
 }
 
@@ -25,6 +26,7 @@ export async function scanVault(
   const files = new Map<string, TFile>();
   const hashes = new Map<string, FileMeta>();
   const skipped: string[] = [];
+  const oversized: string[] = [];
   const hashCache: Record<string, HashCacheEntry> = {};
   const previous = previousHashCache || {};
 
@@ -39,7 +41,9 @@ export async function scanVault(
       continue;
     }
     if (file.stat.size > settings.maxFileBytes) {
-      throw new VaultBridgeError("file_too_large", `${path} exceeds the configured maximum file size.`);
+      skipped.push(path);
+      oversized.push(path);
+      continue;
     }
 
     const cached = previous[path];
@@ -56,7 +60,7 @@ export async function scanVault(
     hashes.set(path, meta);
   }
 
-  return { manifest, files, hashes, skipped, hashCache };
+  return { manifest, files, hashes, skipped, oversized, hashCache };
 }
 
 export function cleanVaultPath(input: string): string {

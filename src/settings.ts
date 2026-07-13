@@ -457,6 +457,11 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           addPathPreview(lines, "deleteRemote", diagnostics.deleteRemotePaths);
           addPathPreview(lines, "conflict", diagnostics.conflictPaths);
           addPathPreview(lines, "autoMerge", diagnostics.autoMergePaths);
+          addPathPreview(lines, "oversized", diagnostics.oversizedPaths);
+          if (diagnostics.warnings?.length) {
+            lines.push("warnings:");
+            for (const warning of diagnostics.warnings) lines.push(`- ${warning}`);
+          }
           if (diagnostics.autoMergeWarnings?.length) {
             lines.push("autoMergeWarnings:");
             for (const warning of diagnostics.autoMergeWarnings) lines.push(`- ${warning}`);

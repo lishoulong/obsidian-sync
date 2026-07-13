@@ -69,6 +69,21 @@ test("scanVault drops cache entries for files that disappeared", async () => {
   assert.equal("b.md" in second.manifest, false);
 });
 
+test("scanVault skips oversized files instead of failing", async () => {
+  const { scanVault } = await loadScanner();
+  const vault = fakeVault([
+    fakeFile("a.md", "alpha", 1000),
+    fakeFile("big.bin", "x".repeat(64), 2000)
+  ]);
+
+  const scan = await scanVault(vault, testSettings({ maxFileBytes: 32 }));
+
+  assert.deepEqual(Object.keys(scan.manifest), ["a.md"]);
+  assert.deepEqual(scan.oversized, ["big.bin"]);
+  assert.ok(scan.skipped.includes("big.bin"));
+  assert.equal("big.bin" in scan.hashCache, false);
+});
+
 test("scanVault does not cache excluded files", async () => {
   const { scanVault } = await loadScanner();
   const vault = fakeVault([

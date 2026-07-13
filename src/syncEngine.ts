@@ -26,6 +26,7 @@ export class SyncEngine {
   private data: VaultBridgePluginData;
   private saveData: (data: VaultBridgePluginData) => Promise<void>;
   private updateStatus: (message: string) => void;
+  private oversized = new Set<string>();
 
   constructor(input: {
     vault: Vault;
@@ -57,6 +58,9 @@ export class SyncEngine {
     const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
     const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
     new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
+    if (initialScan.oversized.length > 0) {
+      new Notice(`VaultBridge skipped ${initialScan.oversized.length} file(s) larger than the sync size limit.`, 8000);
+    }
     if (this.looksLikePathMappingMismatch(pullPlan, initialScan)) {
       return await this.finish({
         status: "error",
@@ -229,7 +233,8 @@ export class SyncEngine {
     const deleteRemote = pushPlan.deleteRemote.map((entry) => requirePath(entry))
       .filter((remotePath) => {
         const localPath = this.remotePathOrSkip(remotePath);
-        return localPath ? !(localPath in postPullScan.manifest) : false;
+        if (!localPath || this.oversized.has(localPath)) return false;
+        return !(localPath in postPullScan.manifest);
       });
     deletedRemote = deleteRemote.length;
 
@@ -273,6 +278,7 @@ export class SyncEngine {
   private async scanVaultCached(): Promise<ScanResult> {
     const scan = await scanVault(this.vault, this.data.settings, this.data.hashCache);
     this.data.hashCache = scan.hashCache;
+    this.oversized = new Set(scan.oversized);
     return scan;
   }
 
@@ -284,6 +290,7 @@ export class SyncEngine {
       remoteCommitSha: plan.remoteCommitSha,
       localFiles: Object.keys(scan.manifest).length,
       skippedFiles: scan.skipped.length,
+      oversizedPaths: scan.oversized.slice(0, 8),
       pullCounts: plan.counts,
       downloadPaths: previewPaths(plan.download),
       deleteLocalPaths: previewPaths(plan.deleteLocal),
@@ -309,6 +316,10 @@ export class SyncEngine {
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
       if (isExcluded(path, this.data.settings.excludePatterns)) continue;
+      if (this.oversized.has(path)) {
+        addWarning(diagnostics, `${path}: skipped download; the local file exceeds the maximum sync size.`);
+        continue;
+      }
       const blobSha = requireBlob(entry);
       const pulled = await client.pullFile(plan.sessionToken, remotePath, blobSha);
       addRequestId(diagnostics, pulled.requestId);
@@ -330,6 +341,7 @@ export class SyncEngine {
       const path = this.remotePathOrSkip(requirePath(entry));
       if (!path) continue;
       if (isExcluded(path, this.data.settings.excludePatterns)) continue;
+      if (this.oversized.has(path)) continue;
       await this.assertLocalUnchanged(path, initialHashes.get(path));
       const file = this.vault.getAbstractFileByPath(path);
       if (!file) continue;
@@ -758,6 +770,11 @@ function addAutoMergePath(diagnostics: SyncDiagnostics, path: string): void {
 function addAutoMergeWarning(diagnostics: SyncDiagnostics, warning: string): void {
   diagnostics.autoMergeWarnings = diagnostics.autoMergeWarnings || [];
   diagnostics.autoMergeWarnings.push(warning);
+}
+
+function addWarning(diagnostics: SyncDiagnostics, warning: string): void {
+  diagnostics.warnings = diagnostics.warnings || [];
+  if (!diagnostics.warnings.includes(warning)) diagnostics.warnings.push(warning);
 }
 
 function decodeUtf8(content: ArrayBuffer, path: string): string {

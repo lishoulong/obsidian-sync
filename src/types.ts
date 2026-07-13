@@ -163,6 +163,8 @@ export interface SyncDiagnostics {
   conflictPaths?: string[];
   autoMergePaths?: string[];
   autoMergeWarnings?: string[];
+  oversizedPaths?: string[];
+  warnings?: string[];
   requestIds?: string[];
   phase?: string;
 }
