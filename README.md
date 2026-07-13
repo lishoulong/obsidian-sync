@@ -58,6 +58,7 @@ On Obsidian desktop, VaultBridge Sync uses the local `git` command. You normally
 - `Git commit and push`
 - `Automatic desktop Git push`
 - `Auto Git idle delay`
+- `Automatic desktop Git pull` and `Auto Git pull interval`
 - `Pull before desktop push`
 - `Files to commit`, for example `vault/` when notes live under a `vault` folder
 
@@ -76,11 +77,23 @@ For self-hosted use, deploy the VaultBridge Worker against your own GitHub repos
 
 Cloudflare Worker secrets cannot be read back after they are set. The plugin's `New token` button creates a replacement token locally and copies it; you must update the Worker's `SYNC_TOKEN` secret to exactly the same value before sync will authenticate.
 
+## Automatic sync
+
+Worker sync runs automatically by default (`Automatic sync`): when the app opens, when it returns to the foreground, after a debounced idle delay following edits, and on a configurable interval. Automatic runs are quiet — a no-op sync shows nothing, a successful sync shows a short summary, and repeated identical conflicts or errors notify only once. Disable the toggle to sync manually only.
+
+Sync progress (per-file download/upload counters) is shown in a live notice and, on desktop, in the status bar; the status bar also shows the last sync outcome while idle. A running sync can be stopped with the `Cancel running sync` command.
+
+Files larger than the sync size limit are skipped with a warning instead of failing the sync. If a sync would delete more files than the `Delete guard threshold` (default 20), it stops and asks you to confirm with the `Approve large delete for next sync` command. Use `Show pending conflicts` to list recorded conflicts and jump to the affected notes and conflict copies.
+
 ## Desktop Git autosync
 
 On Obsidian desktop, the plugin can commit and push local vault changes with the local `git` command. Automatic Git push is disabled by default. When enabled, vault file changes are debounced and pushed after the configured idle delay. Before pushing, the plugin can run `git pull --rebase --autostash`.
 
-If Git reports a rebase, merge, or push conflict, the plugin records a pending desktop Git conflict, pauses automatic Git push, and leaves the Git working tree for manual resolution. After resolving the files, run the `Continue desktop Git conflict` command or use the settings button to continue the rebase/merge and push. It does not auto-merge conflicts.
+Automatic desktop Git pull is enabled by default: the plugin pulls with `git pull --rebase --autostash` on startup, when the window regains focus, and on the configured interval, so changes pushed from mobile appear without waiting for a local edit. Auto pull silently disables itself for the session when the vault is not inside a Git repository. A manual `Desktop Git pull` command is also available.
+
+If Git reports a rebase, merge, or push conflict, the plugin records a pending desktop Git conflict, pauses automatic Git push, and leaves the Git working tree for manual resolution. After resolving the files, run the `Continue desktop Git conflict` command or use the settings button to continue the rebase/merge and push.
+
+When `Auto Merge Conflict` is enabled, the `Auto merge desktop Git conflict` command (or the settings button) resolves conflicted text files with the configured model: the local and remote sides are merged semantically, staged, and the rebase/merge continues and pushes once everything resolves. In `Apply locally` mode this also runs automatically when auto pull or auto push hits a conflict. Unsupported, oversized, or low-confidence files are left for manual resolution.
 
 On mobile, conflicts reported by the Worker are handled separately: the plugin keeps the local file unchanged, writes the remote version as a sibling `.remote-conflict-...` file, and stops before pushing. After you merge the content and delete the conflict copy, the next sync treats the local file as the resolved version and pushes it instead of recreating the same conflict copy.
 
