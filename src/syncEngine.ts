@@ -26,6 +26,7 @@ export class SyncEngine {
   private data: VaultBridgePluginData;
   private saveData: (data: VaultBridgePluginData) => Promise<void>;
   private updateStatus: (message: string) => void;
+  private isCancelled: () => boolean;
   private oversized = new Set<string>();
 
   constructor(input: {
@@ -34,12 +35,18 @@ export class SyncEngine {
     data: VaultBridgePluginData;
     saveData: (data: VaultBridgePluginData) => Promise<void>;
     updateStatus: (message: string) => void;
+    isCancelled?: () => boolean;
   }) {
     this.vault = input.vault;
     this.fileManager = input.fileManager;
     this.data = input.data;
     this.saveData = input.saveData;
     this.updateStatus = input.updateStatus;
+    this.isCancelled = input.isCancelled || (() => false);
+  }
+
+  private checkCancelled(): void {
+    if (this.isCancelled()) throw new VaultBridgeError("cancelled", "Sync cancelled.");
   }
 
   async syncNow(): Promise<SyncResult> {
@@ -68,7 +75,7 @@ export class SyncEngine {
         counts: { downloaded: 0, uploaded: 0, deletedLocal: 0, deletedRemote: 0, conflicts: pullPlan.counts.conflict, unchanged: pullPlan.counts.unchanged },
         conflictPaths: [],
         diagnostics
-      }, false);
+      });
     }
     let downloaded = 0;
     let deletedLocal = 0;
@@ -97,7 +104,7 @@ export class SyncEngine {
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pullConflictState.unresolved.length, unchanged: pullPlan.unchanged.length },
         conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
-      }, false);
+      });
     }
     const resolvedConflicts = [...pullConflictState.resolved];
 
@@ -187,7 +194,7 @@ export class SyncEngine {
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: pushConflictState.unresolved.length, unchanged: pushPlan.unchanged.length },
         conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
-      }, false);
+      });
     }
 
     if (this.hasRelevantRemoteEntries(pushPlan.download) || this.hasRelevantRemoteEntries(pushPlan.deleteLocal)) {
@@ -208,19 +215,22 @@ export class SyncEngine {
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pushPlan.unchanged.length },
         conflictPaths: [],
         diagnostics
-      }, true);
+      });
     }
 
     diagnostics.phase = "upload_blobs";
     this.updateStatus("Uploading local changes...");
     const blobs: BlobEntry[] = [];
     const upsert: FileManifest = {};
+    const uploadTotal = pushPlan.upload.length;
     for (const entry of pushPlan.upload) {
+      this.checkCancelled();
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
       const file = postPullScan.files.get(path) || this.vault.getFileByPath(path);
       if (!file) throw new VaultBridgeError("missing_upload_file", `${path} no longer exists for remote ${remotePath}.`);
+      this.updateStatus(`Uploading ${uploaded + 1}/${uploadTotal}: ${path}`);
       const bytes = await this.vault.readBinary(file);
       const blob = await client.createBlob(remotePath, bytes);
       blobs.push(blob);
@@ -263,7 +273,7 @@ export class SyncEngine {
       commitSha: commit.commitSha,
       conflictPaths: [],
       diagnostics
-    }, true);
+    });
     } catch (error) {
       return await this.finish({
         status: "error",
@@ -271,7 +281,7 @@ export class SyncEngine {
         counts: { downloaded, uploaded, deletedLocal, deletedRemote, conflicts: 0, unchanged: pullPlan.unchanged.length },
         conflictPaths: conflictCopies.concat(autoMergePaths),
         diagnostics
-      }, false);
+      });
     }
   }
 
@@ -311,7 +321,9 @@ export class SyncEngine {
 
   private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>, diagnostics: SyncDiagnostics): Promise<number> {
     let count = 0;
+    const total = plan.download.length;
     for (const entry of plan.download) {
+      this.checkCancelled();
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
@@ -320,6 +332,7 @@ export class SyncEngine {
         addWarning(diagnostics, `${path}: skipped download; the local file exceeds the maximum sync size.`);
         continue;
       }
+      this.updateStatus(`Downloading ${count + 1}/${total}: ${path}`);
       const blobSha = requireBlob(entry);
       const pulled = await client.pullFile(plan.sessionToken, remotePath, blobSha);
       addRequestId(diagnostics, pulled.requestId);
@@ -725,14 +738,10 @@ export class SyncEngine {
     return entries.some((entry) => this.remotePathOrSkip(entry.path) !== null);
   }
 
-  private async finish(result: Omit<SyncResult, "completedAt">, persist: boolean): Promise<SyncResult> {
+  private async finish(result: Omit<SyncResult, "completedAt">): Promise<SyncResult> {
     const full = { ...result, completedAt: new Date().toISOString() };
     this.data.lastResult = full;
-    if (persist) {
-      await this.saveData(this.data);
-    } else {
-      await this.saveData(this.data);
-    }
+    await this.saveData(this.data);
     return full;
   }
 }

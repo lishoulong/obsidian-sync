@@ -25,9 +25,16 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private syncing = false;
   private gitPushing = false;
   private autoGitPushTimer: number | null = null;
+  private cancelSyncRequested = false;
+  private statusBarEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
+
+    if (Platform.isDesktopApp) {
+      this.statusBarEl = this.addStatusBarItem();
+      this.updateStatusBarIdle();
+    }
 
     if (Platform.isDesktopApp) {
       this.addRibbonIcon("git-branch", "VaultBridge Git push", () => {
@@ -44,6 +51,19 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       name: "Sync now",
       callback: () => {
         void this.syncNow();
+      }
+    });
+
+    this.addCommand({
+      id: "cancel-sync",
+      name: "Cancel running sync",
+      callback: () => {
+        if (!this.syncing) {
+          new Notice("No VaultBridge sync is running.");
+          return;
+        }
+        this.cancelSyncRequested = true;
+        new Notice("VaultBridge sync will stop after the current file.");
       }
     });
 
@@ -181,7 +201,8 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     }
 
     this.syncing = true;
-    new Notice("VaultBridge sync started.");
+    this.cancelSyncRequested = false;
+    const progress = new SyncProgressReporter(this.statusBarEl);
 
     try {
       const engine = new SyncEngine({
@@ -192,7 +213,8 @@ export default class VaultBridgeSyncPlugin extends Plugin {
           this.data = data;
           await this.savePluginData();
         },
-        updateStatus: () => undefined
+        updateStatus: (message) => progress.update(message),
+        isCancelled: () => this.cancelSyncRequested
       });
       const result = await engine.syncNow();
       showResultNotice(result);
@@ -214,7 +236,24 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       new Notice(message, 12000);
     } finally {
       this.syncing = false;
+      this.cancelSyncRequested = false;
+      progress.done();
+      this.updateStatusBarIdle();
     }
+  }
+
+  private updateStatusBarIdle(): void {
+    if (!this.statusBarEl) return;
+    const result = this.data.lastResult;
+    if (!result) {
+      this.statusBarEl.setText("VaultBridge: idle");
+      return;
+    }
+    const time = formatClock(result.completedAt);
+    const label = result.status === "success" ? `synced ${time}`
+      : result.status === "conflict" ? `${result.counts.conflicts} conflict(s) ${time}`
+        : `error ${time}`;
+    this.statusBarEl.setText(`VaultBridge: ${label}`);
   }
 
   async desktopGitCommitPush(): Promise<void> {
@@ -308,6 +347,32 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       throw new Error("Worker sync is hidden on desktop. Enable Worker sync on desktop in settings to use this command.");
     }
   }
+}
+
+class SyncProgressReporter {
+  private notice: Notice;
+  private statusBarEl: HTMLElement | null;
+
+  constructor(statusBarEl: HTMLElement | null) {
+    this.statusBarEl = statusBarEl;
+    this.notice = new Notice("VaultBridge sync started.", 0);
+  }
+
+  update(message: string): void {
+    this.notice.setMessage(`VaultBridge: ${message}`);
+    this.statusBarEl?.setText(`VaultBridge: ${message}`);
+  }
+
+  done(): void {
+    this.notice.hide();
+  }
+}
+
+function formatClock(isoTimestamp: string): string {
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function formatError(error: unknown): string {
