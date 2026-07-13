@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -15,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify tag matches manifest version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -27,8 +29,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css \
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            EXTRA_ARGS=(--verify-tag)
+          else
+            TAG="v$(node -p "require('./manifest.json').version")"
+            EXTRA_ARGS=(--target "$GITHUB_SHA")
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping." >&2
+            exit 0
+          fi
+          gh release create "$TAG" main.js manifest.json styles.css \
             --repo "$GITHUB_REPOSITORY" \
-            --title "VaultBridge Sync ${GITHUB_REF_NAME#v}" \
-            --verify-tag \
+            --title "VaultBridge Sync ${TAG#v}" \
+            "${EXTRA_ARGS[@]}" \
             --generate-notes
