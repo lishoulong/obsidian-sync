@@ -220,23 +220,28 @@ export class SyncEngine {
 
     diagnostics.phase = "upload_blobs";
     this.updateStatus("Uploading local changes...");
-    const blobs: BlobEntry[] = [];
-    const upsert: FileManifest = {};
-    const uploadTotal = pushPlan.upload.length;
+    const uploadWork: Array<{ remotePath: string; file: TFile }> = [];
     for (const entry of pushPlan.upload) {
-      this.checkCancelled();
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
       const file = postPullScan.files.get(path) || this.vault.getFileByPath(path);
       if (!file) throw new VaultBridgeError("missing_upload_file", `${path} no longer exists for remote ${remotePath}.`);
-      this.updateStatus(`Uploading ${uploaded + 1}/${uploadTotal}: ${path}`);
-      const bytes = await this.vault.readBinary(file);
-      const blob = await client.createBlob(remotePath, bytes);
-      blobs.push(blob);
-      upsert[remotePath] = postPullRemoteManifest[remotePath];
+      uploadWork.push({ remotePath, file });
+    }
+
+    const upsert: FileManifest = {};
+    const blobs = await mapWithConcurrency(uploadWork, TRANSFER_CONCURRENCY, async (item) => {
+      this.checkCancelled();
+      const bytes = await this.vault.readBinary(item.file);
+      const blob = await client.createBlob(item.remotePath, bytes);
       addRequestId(diagnostics, blob.requestId);
       uploaded += 1;
+      this.updateStatus(`Uploading ${uploaded}/${uploadWork.length}: ${item.file.path}`);
+      return blob;
+    });
+    for (const item of uploadWork) {
+      upsert[item.remotePath] = postPullRemoteManifest[item.remotePath];
     }
 
     diagnostics.phase = "prepare_commit";
@@ -320,10 +325,8 @@ export class SyncEngine {
   }
 
   private async applyDownloads(client: WorkerClient, plan: SyncPlan, initialHashes: Map<string, FileMeta>, diagnostics: SyncDiagnostics): Promise<number> {
-    let count = 0;
-    const total = plan.download.length;
+    const work: Array<{ remotePath: string; path: string; blobSha: string }> = [];
     for (const entry of plan.download) {
-      this.checkCancelled();
       const remotePath = requirePath(entry);
       const path = this.remotePathOrSkip(remotePath);
       if (!path) continue;
@@ -332,20 +335,25 @@ export class SyncEngine {
         addWarning(diagnostics, `${path}: skipped download; the local file exceeds the maximum sync size.`);
         continue;
       }
-      this.updateStatus(`Downloading ${count + 1}/${total}: ${path}`);
-      const blobSha = requireBlob(entry);
-      const pulled = await client.pullFile(plan.sessionToken, remotePath, blobSha);
+      work.push({ remotePath, path, blobSha: requireBlob(entry) });
+    }
+
+    let completed = 0;
+    await mapWithConcurrency(work, TRANSFER_CONCURRENCY, async (item) => {
+      this.checkCancelled();
+      const pulled = await client.pullFile(plan.sessionToken, item.remotePath, item.blobSha);
       addRequestId(diagnostics, pulled.requestId);
       const content = base64ToArrayBuffer(pulled.content);
       const hash = await sha256Hex(content);
       if (content.byteLength !== pulled.size || hash !== pulled.sha256) {
-        throw new VaultBridgeError("download_integrity", `${path} download failed integrity checks.`);
+        throw new VaultBridgeError("download_integrity", `${item.path} download failed integrity checks.`);
       }
-      await this.assertLocalUnchanged(path, initialHashes.get(path), { size: content.byteLength, sha256: hash });
-      await this.writeDownloadedFile(path, content);
-      count += 1;
-    }
-    return count;
+      await this.assertLocalUnchanged(item.path, initialHashes.get(item.path), { size: content.byteLength, sha256: hash });
+      await this.writeDownloadedFile(item.path, content);
+      completed += 1;
+      this.updateStatus(`Downloading ${completed}/${work.length}: ${item.path}`);
+    });
+    return completed;
   }
 
   private async applyLocalDeletes(plan: SyncPlan, initialHashes: Map<string, FileMeta>): Promise<number> {
@@ -744,6 +752,22 @@ export class SyncEngine {
     await this.saveData(this.data);
     return full;
   }
+}
+
+const TRANSFER_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function requirePath(entry: SyncPlanEntry): string {
