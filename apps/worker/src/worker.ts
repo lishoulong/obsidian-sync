@@ -1,4 +1,4 @@
-import { getConfigStatus } from "./config.js";
+import { getWorkerReadiness } from "./config.js";
 import { requireAuth } from "./auth.js";
 import { cors, json } from "./http.js";
 import { checkPushV1, commitV1 } from "./handlers/v1.js";
@@ -12,8 +12,21 @@ import {
 import { createRequestContext, log } from "./observability.js";
 import { HttpError } from "./http.js";
 import type { Env } from "./types.js";
+import {
+  createPairingCode,
+  cleanupPairingCodes,
+  exchangePairingCode,
+  listDevices,
+  revokeDevice,
+} from "./pairing.js";
 
 export default {
+  async scheduled(
+    controller: { scheduledTime: number },
+    env: Env,
+  ): Promise<void> {
+    await cleanupPairingCodes(env, controller.scheduledTime);
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const ctx = createRequestContext(request);
     try {
@@ -22,21 +35,46 @@ export default {
       const url = new URL(request.url);
       log(ctx, "request_start", { path: url.pathname });
       if (url.pathname === "/health" && request.method === "GET") {
-        const config = getConfigStatus(env);
+        const readiness = getWorkerReadiness(env);
         return cors(
           json({
             ok: true,
             service: "vaultbridge",
-            version: "0.3.3",
+            version: "0.4.0",
             protocol: 2,
             mode: "self-hosted",
-            configured: config.ok,
-            missingConfig: config.missing,
+            configured: readiness.configured,
+            coreConfigured: readiness.coreSync.ready,
+            missingConfig: readiness.missing,
+            readiness: {
+              coreSync: readiness.coreSync,
+              devicePairing: readiness.devicePairing,
+            },
+            features: {
+              devicePairing: readiness.devicePairing.ready,
+            },
             requestId: ctx.id,
           }),
         );
       }
-      requireAuth(request, env);
+      if (url.pathname === "/v2/pairing/exchange" && request.method === "POST")
+        return cors(await exchangePairingCode(request, env));
+      const principal = await requireAuth(request, env);
+      if (url.pathname === "/v2/pairing/codes" && request.method === "POST")
+        return cors(await createPairingCode(request, env, principal));
+      if (url.pathname === "/v2/devices" && request.method === "GET")
+        return cors(await listDevices(env, principal));
+      if (
+        url.pathname.startsWith("/v2/devices/") &&
+        request.method === "DELETE"
+      )
+        return cors(
+          await revokeDevice(
+            url.pathname.slice("/v2/devices/".length),
+            env,
+            principal,
+          ),
+        );
       if (url.pathname === "/v2/setup/check" && request.method === "GET")
         return cors(await setupCheckV2(env, ctx));
       if (url.pathname === "/v2/sync/check" && request.method === "POST")

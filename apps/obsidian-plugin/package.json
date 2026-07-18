@@ -1,6 +1,6 @@
 {
   "name": "@vaultbridge/obsidian-plugin",
-  "version": "0.1.41",
+  "version": "0.2.0",
   "description": "Obsidian plugin for VaultBridge Worker Protocol v2 sync.",
   "private": true,
   "main": "main.js",
@@ -19,9 +19,13 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "@types/qrcode": "^1.5.6",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.23.0",
     "obsidian": "^1.8.7",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

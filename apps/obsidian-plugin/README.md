@@ -72,24 +72,30 @@ On Obsidian desktop, VaultBridge Sync uses the local `git` command. You normally
 - `Pull before desktop push`
 - `Files to commit`, for example `vault/` when notes live under a `vault` folder
 
-Worker settings are hidden on desktop by default. Enable `Enable Worker sync on desktop` only when you intentionally want to run the mobile-style Worker sync workflow from a desktop vault.
+Worker connection and mobile-device management remain available on desktop. Enable `Enable Worker sync on desktop` only when you intentionally want the desktop vault itself to run the mobile-style Worker sync or initial migration; desktop notes otherwise continue to use local Git.
 
-On Obsidian mobile, VaultBridge Sync uses the Cloudflare Worker protocol and requires:
+On Obsidian mobile, VaultBridge Sync uses the Cloudflare Worker protocol and requires either:
 
-- Worker URL, for example `https://vaultbridge.example.workers.dev`
-- `SYNC_TOKEN` configured on the Worker
+- a one-time pairing link opened after this plugin is installed and enabled in
+  the target vault; or
+- a Worker URL plus the administrator `SYNC_TOKEN` for the first managing
+  device.
 
-The plugin generates and stores an internal per-device ID plus compact sync state in Obsidian plugin data, not in the synced vault. Users normally do not need to edit the device ID.
+The plugin generates and stores an internal per-device ID plus compact sync state in Obsidian plugin data, not in the synced vault. Users normally do not need to edit the device ID. A manually configured first device can create a five-minute pairing QR; the mobile plugin exchanges it for an independent, revocable device token without putting the Worker `SYNC_TOKEN` in the link.
 
-`Test connection` checks the Worker health, authenticates with `SYNC_TOKEN`, and verifies that the self-hosted Worker can access its configured GitHub repository and branch.
+`Test connection` checks Worker health, authentication, D1 pairing readiness,
+repository, branch, and file-size limit. A paired device can use **Disconnect
+this device** to revoke its own credential without deleting local notes.
 
 For self-hosted use, follow the [Worker deployment guide](../../docs/self-host.zh-CN.md), then copy the Worker URL and `SYNC_TOKEN` into this plugin. The plugin never stores a GitHub token.
 
-Cloudflare Worker secrets cannot be read back after they are set. The plugin's `New token` button creates a replacement token locally and copies it; you must update the Worker's `SYNC_TOKEN` secret to exactly the same value before sync will authenticate.
+Cloudflare Worker secrets cannot be read back after they are set. Enter the same `SYNC_TOKEN` value in the Worker configuration and the plugin settings before testing the connection.
 
-## Automatic sync
+## First sync and automatic sync
 
-Worker sync runs automatically by default (`Automatic sync`): when the app opens, when it returns to the foreground, after a debounced idle delay following edits, and on a configurable interval. Automatic runs are quiet — a no-op sync shows nothing, a successful sync shows a short summary, and repeated identical conflicts or errors notify only once. Disable the toggle to sync manually only.
+New devices must choose and preview one of three first-sync modes before any files move: GitHub as the source requires an empty local notes folder, this device as the source requires an empty remote notes folder, and safe merge preserves the conservative conflict behavior. The plugin rechecks that the preview has not changed before it starts.
+
+Automatic sync remains disabled until the reviewed first sync succeeds. It then runs when the app opens, when it returns to the foreground, after a debounced idle delay following edits, and on a configurable interval. Automatic runs are quiet — a no-op sync shows nothing, a successful sync shows a short summary, and repeated identical conflicts or errors notify only once. Disable the toggle to sync manually only.
 
 Sync progress (per-file download/upload counters) is shown in a live notice and, on desktop, in the status bar; the status bar also shows the last sync outcome while idle. A running sync can be stopped with the `Cancel running sync` command.
 

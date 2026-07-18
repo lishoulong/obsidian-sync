@@ -1,5 +1,6 @@
 export interface Env {
   SYNC_TOKEN?: string;
+  DB?: D1DatabaseLike;
   GITHUB_TOKEN?: string;
   GITHUB_REPOSITORY?: string;
   GITHUB_OWNER?: string;
@@ -7,6 +8,29 @@ export interface Env {
   GITHUB_BRANCH?: string;
   MAX_FILE_BYTES?: string | number;
 }
+
+export interface D1ResultLike<T = Record<string, unknown>> {
+  results?: T[];
+  success?: boolean;
+  meta?: { changes?: number };
+}
+
+export interface D1PreparedStatementLike {
+  bind(...values: unknown[]): D1PreparedStatementLike;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<D1ResultLike<T>>;
+  run(): Promise<D1ResultLike>;
+}
+
+export interface D1DatabaseLike {
+  prepare(query: string): D1PreparedStatementLike;
+  batch<T = Record<string, unknown>>(
+    statements: D1PreparedStatementLike[],
+  ): Promise<D1ResultLike<T>[]>;
+}
+
+export type AuthPrincipal =
+  { kind: "legacy"; deviceId: null } | { kind: "device"; deviceId: string };
 
 export interface RequestContext {
   id: string;

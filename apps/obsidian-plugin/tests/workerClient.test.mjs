@@ -116,6 +116,87 @@ test("syncCheck times out stalled requestUrl calls", async () => {
   await assert.rejects(() => client.syncCheck("device", null, {}), /timed out/);
 });
 
+test("pairing code creation uses the current Worker bearer token", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  let request;
+  installRequestUrl(async (input) => {
+    request = input;
+    return jsonRequestResponse({ code: "ABC123", expiresAt: "2026-07-13T12:00:00.000Z" }, 201);
+  });
+
+  const result = await new WorkerClient(testSettings()).createPairingCode(300);
+
+  assert.equal(result.code, "ABC123");
+  assert.equal(request.url, "https://worker.test/v2/pairing/codes");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.authorization, "Bearer sync-token");
+  assert.equal(request.throw, false);
+  assert.deepEqual(JSON.parse(request.body), { expiresInSeconds: 300 });
+});
+
+test("pairing exchange is public and sends a device name", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  let request;
+  installRequestUrl(async (input) => {
+    request = input;
+    return jsonRequestResponse({
+      token: "device-token",
+      device: { id: "device-id", name: "My phone", createdAt: "2026-07-13T12:00:00.000Z" }
+    }, 201);
+  });
+
+  const result = await new WorkerClient(testSettings()).exchangePairingCode(" ABC123 ", " My phone ");
+
+  assert.equal(result.token, "device-token");
+  assert.equal(request.url, "https://worker.test/v2/pairing/exchange");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.authorization, undefined);
+  assert.equal(request.throw, false);
+  assert.deepEqual(JSON.parse(request.body), { code: "ABC123", deviceName: "My phone" });
+});
+
+test("device list uses authentication and returns revocation metadata", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  let request;
+  const devices = [{
+    id: "phone-id",
+    name: "My phone",
+    createdAt: "2026-07-13T12:00:00.000Z",
+    lastUsedAt: null,
+    revokedAt: null
+  }];
+  installRequestUrl(async (input) => {
+    request = input;
+    return jsonRequestResponse({ devices });
+  });
+
+  const result = await new WorkerClient(testSettings()).listDevices();
+
+  assert.deepEqual(result.devices, devices);
+  assert.equal(request.url, "https://worker.test/v2/devices");
+  assert.equal(request.method, "GET");
+  assert.equal(request.headers.authorization, "Bearer sync-token");
+});
+
+test("device revocation encodes the id, authenticates, and is never retried", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  let request;
+  let calls = 0;
+  installRequestUrl(async (input) => {
+    calls += 1;
+    request = input;
+    return jsonRequestResponse({}, 204);
+  });
+
+  await new WorkerClient(testSettings(), [1, 1, 1]).revokeDevice(" phone/id ");
+
+  assert.equal(calls, 1);
+  assert.equal(request.url, "https://worker.test/v2/devices/phone%2Fid");
+  assert.equal(request.method, "DELETE");
+  assert.equal(request.headers.authorization, "Bearer sync-token");
+  await assert.rejects(() => new WorkerClient(testSettings()).revokeDevice("  "), /Device ID is required/);
+});
+
 let workerClientModulePromise = null;
 
 function loadWorkerClient() {

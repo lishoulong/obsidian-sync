@@ -3,6 +3,17 @@
   "name": "vaultbridge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vaultbridge",
+      "database_id": "replace-with-your-d1-database-id",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     "GITHUB_OWNER": "your-github-user-or-org",
     "GITHUB_REPO": "your-vault-repo",

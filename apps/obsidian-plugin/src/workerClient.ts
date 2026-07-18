@@ -4,11 +4,16 @@ import {
   BlobEntry,
   CommitResponse,
   DeviceState,
+  DeviceListResponse,
   FileManifest,
   PullFileResponse,
+  PairingCodeResponse,
+  PairingExchangeResponse,
   SyncPlan,
   VaultBridgeError,
-  VaultBridgeSettings
+  VaultBridgeSettings,
+  WorkerHealthResponse,
+  WorkerSetupCheckResponse
 } from "./types";
 import { normalizeWorkerUrl } from "./settings";
 
@@ -21,6 +26,8 @@ interface WorkerErrorBody {
 const REQUEST_TIMEOUT_MS = 120000;
 const DEFAULT_RETRY_DELAYS_MS = [1000, 2000, 4000];
 const RETRYABLE_HTTP_STATUS = new Set([429, 500, 502, 503, 504]);
+export const PAIRING_CREATE_PATH = "/v2/pairing/codes";
+export const PAIRING_EXCHANGE_PATH = "/v2/pairing/exchange";
 
 export class WorkerClient {
   private settings: VaultBridgeSettings;
@@ -37,12 +44,32 @@ export class WorkerClient {
     this.requestTimeoutMs = requestTimeoutMs;
   }
 
-  async health(): Promise<{ ok: boolean; service: string; protocol: number; version?: string }> {
+  async health(): Promise<WorkerHealthResponse> {
     return this.request("GET", "/health", null, false, true);
   }
 
-  async setupCheck(): Promise<{ ok: boolean; repository?: { fullName?: string; branch?: string; headCommitSha?: string } }> {
+  async setupCheck(): Promise<WorkerSetupCheckResponse> {
     return this.request("GET", "/v2/setup/check", null, true, true);
+  }
+
+  async createPairingCode(expiresInSeconds = 300): Promise<PairingCodeResponse> {
+    return this.request("POST", PAIRING_CREATE_PATH, { expiresInSeconds }, true, false);
+  }
+
+  async exchangePairingCode(code: string, deviceName?: string): Promise<PairingExchangeResponse> {
+    const body: { code: string; deviceName?: string } = { code: code.trim() };
+    if (deviceName?.trim()) body.deviceName = deviceName.trim();
+    return this.request("POST", PAIRING_EXCHANGE_PATH, body, false, false);
+  }
+
+  async listDevices(): Promise<DeviceListResponse> {
+    return this.request("GET", "/v2/devices", null, true, true);
+  }
+
+  async revokeDevice(deviceId: string): Promise<void> {
+    const id = deviceId.trim();
+    if (!id) throw new Error("Device ID is required.");
+    await this.request("DELETE", `/v2/devices/${encodeURIComponent(id)}`, null, true, false);
   }
 
   async syncCheck(deviceId: string, lastSyncedCommitSha: string | null, files: FileManifest): Promise<SyncPlan> {

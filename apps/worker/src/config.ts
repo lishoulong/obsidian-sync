@@ -48,6 +48,32 @@ export function getConfigStatus(env: Env): { ok: boolean; missing: string[] } {
   }
   return { ok: missing.length === 0, missing };
 }
+
+export interface WorkerReadiness {
+  configured: boolean;
+  missing: string[];
+  coreSync: { ready: boolean; missing: string[] };
+  devicePairing: { ready: boolean; missing: string[] };
+}
+
+/**
+ * Report core synchronization and optional stateful pairing separately. D1 is
+ * not needed by the legacy shared-token protocol, but it is required for the
+ * advertised new-device onboarding flow.
+ */
+export function getWorkerReadiness(env: Env): WorkerReadiness {
+  const core = getConfigStatus(env);
+  const pairingMissing = env.DB ? [] : ["DB"];
+  return {
+    configured: core.ok && pairingMissing.length === 0,
+    missing: [...core.missing, ...pairingMissing],
+    coreSync: { ready: core.ok, missing: core.missing },
+    devicePairing: {
+      ready: pairingMissing.length === 0,
+      missing: pairingMissing,
+    },
+  };
+}
 function validateGitHubName(value: string, name: string): void {
   if (!value) throw httpError(500, "missing_config", `${name} is required`);
   if (!/^[A-Za-z0-9_.-]+$/.test(value))

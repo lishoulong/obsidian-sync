@@ -1,15 +1,41 @@
 {
   "name": "@vaultbridge/worker",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "check": "tsc --noEmit && prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "deploy": "node scripts/deploy.mjs",
+    "db:migrate": "node scripts/deploy.mjs --migrate-only",
+    "check": "tsc --noEmit && prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/deploy.mjs\"",
     "test": "tsx --test tests/*.test.ts",
     "build": "wrangler deploy --dry-run --outdir .wrangler/tmp/bundle",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+  },
+  "cloudflare": {
+    "bindings": {
+      "GITHUB_OWNER": {
+        "description": "GitHub owner of the private Obsidian notes repository."
+      },
+      "GITHUB_REPO": {
+        "description": "Name of the private Obsidian notes repository."
+      },
+      "GITHUB_BRANCH": {
+        "description": "Git branch to synchronize, normally `main`."
+      },
+      "MAX_FILE_BYTES": {
+        "description": "Maximum file size accepted by the Worker. The default is 20971520 (20 MiB)."
+      },
+      "GITHUB_TOKEN": {
+        "description": "Fine-grained GitHub token restricted to the notes repository with Contents read/write."
+      },
+      "SYNC_TOKEN": {
+        "description": "Generate a random administrator token with `openssl rand -base64 32` and save it in a password manager."
+      },
+      "DB": {
+        "description": "D1 stores one-time pairing codes and revocable per-device credentials."
+      }
+    }
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -17,5 +43,8 @@
     "tsx": "^4.20.3",
     "typescript": "^5.4.5",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   }
 }

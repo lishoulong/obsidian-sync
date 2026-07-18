@@ -1,13 +1,11 @@
 import { App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import type VaultBridgeSyncPlugin from "./main";
 import { listAutoMergeModels } from "./autoMerge";
-import { DeviceState, VaultBridgePluginData, VaultBridgeSettings } from "./types";
+import { DeviceState, InitialSyncPreview, PairedDevice, VaultBridgePluginData, VaultBridgeSettings } from "./types";
 
 const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_AUTO_MERGE_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_AUTO_MERGE_MODEL = "deepseek-v4-flash";
-const CLOUDFLARE_WORKERS_URL = "https://dash.cloudflare.com/?to=/:account/workers-and-pages";
-const CLOUDFLARE_WORKERS_DOCS_URL = "https://developers.cloudflare.com/workers/";
 const DEEPSEEK_API_KEYS_URL = "https://platform.deepseek.com/api_keys";
 const DEFAULT_AUTO_MERGE_MODELS = [
   "deepseek-v4-flash",
@@ -31,6 +29,7 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
 export const DEFAULT_SETTINGS: VaultBridgeSettings = {
   workerUrl: "",
   syncToken: "",
+  workerCredentialKind: null,
   deviceId: "",
   localPrefix: "",
   remotePrefix: "vault/",
@@ -61,6 +60,11 @@ export function createDefaultData(): VaultBridgePluginData {
     settings: { ...DEFAULT_SETTINGS, excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS] },
     deviceState: null,
     lastResult: null,
+    onboarding: {
+      initialSyncCompleted: false,
+      mode: null,
+      preview: null
+    },
     pendingConflicts: {},
     pendingDesktopGitConflict: null,
     hashCache: {}
@@ -77,6 +81,24 @@ export function normalizeWorkerUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+export function validateWorkerEndpoint(value: string): string {
+  const normalized = normalizeWorkerUrl(value);
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error("Worker URL is invalid.");
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error("Worker URL must use HTTPS.");
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new Error("Worker URL must contain only the Worker origin.");
+  }
+  return url.origin;
+}
+
 export function normalizeRemotePrefix(value: string): string {
   const trimmed = value.trim().replace(/^\/+/, "").replace(/\\/g, "/").replace(/\/+$/, "");
   return trimmed ? `${trimmed}/` : "";
@@ -88,7 +110,8 @@ export function normalizeLocalPrefix(value: string): string {
 
 export function validateRequiredSettings(settings: VaultBridgeSettings): void {
   if (!normalizeWorkerUrl(settings.workerUrl)) throw new Error("Worker URL is required.");
-  if (!settings.syncToken.trim()) throw new Error("SYNC_TOKEN is required.");
+  validateWorkerEndpoint(settings.workerUrl);
+  if (!settings.syncToken.trim()) throw new Error("Worker access token is required.");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/.test(settings.deviceId.trim())) {
     throw new Error("Device ID must be 2-64 characters using letters, numbers, dot, underscore, or hyphen.");
   }
@@ -110,6 +133,8 @@ export function maskToken(token: string): string {
 export class VaultBridgeSettingTab extends PluginSettingTab {
   plugin: VaultBridgeSyncPlugin;
   private autoMergeModelOptions = [...DEFAULT_AUTO_MERGE_MODELS];
+  private pairedDevices: PairedDevice[] | null = null;
+  private deviceListError = "";
 
   constructor(app: App, plugin: VaultBridgeSyncPlugin) {
     super(app, plugin);
@@ -120,7 +145,8 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const settings = this.plugin.data.settings;
     const isDesktop = Platform.isDesktopApp;
-    const workerSyncVisible = !isDesktop || settings.desktopWorkerSyncEnabled;
+    const workerSyncVisible = true;
+    const workerSyncOperationsVisible = !isDesktop || settings.desktopWorkerSyncEnabled;
 
     containerEl.empty();
     containerEl.createEl("h2", { text: "VaultBridge Sync" });
@@ -239,7 +265,7 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Enable Worker sync on desktop")
-        .setDesc("Advanced: show mobile-style Worker sync settings on desktop. Desktop normally uses local Git instead.")
+        .setDesc("Advanced: allow this desktop device to run Worker sync and first migration. Desktop normally uses local Git; connection and mobile-device management stay available.")
         .addToggle((toggle) => toggle
           .setValue(settings.desktopWorkerSyncEnabled)
           .onChange(async (value) => {
@@ -247,6 +273,12 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
             await this.plugin.savePluginData();
             this.display();
           }));
+
+      if (!settings.desktopWorkerSyncEnabled) {
+        new Setting(containerEl)
+          .setName("Desktop uses local Git")
+          .setDesc("Worker connection testing and mobile pairing remain available below. To migrate or sync this desktop through the Worker, explicitly enable Worker sync above; the reviewed first-sync controls will then appear.");
+      }
     }
 
     if (workerSyncVisible) {
@@ -261,55 +293,179 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             settings.workerUrl = normalizeWorkerUrl(value);
             await this.plugin.savePluginData();
-          }))
-        .addButton((button) => button
-          .setButtonText("Open Cloudflare")
-          .onClick(() => {
-            openExternal(CLOUDFLARE_WORKERS_URL);
-          }))
-        .addButton((button) => button
-          .setButtonText("Docs")
-          .onClick(() => {
-            openExternal(CLOUDFLARE_WORKERS_DOCS_URL);
           }));
 
       new Setting(containerEl)
-        .setName("SYNC_TOKEN")
-        .setDesc(`Paste the same value configured in the Worker's SYNC_TOKEN secret. New token creates a local replacement; Cloudflare secrets cannot be read back. Current value: ${maskToken(settings.syncToken) || "not set"}`)
+        .setName("Worker access token")
+        .setDesc("The first managing device uses the administrator SYNC_TOKEN. Devices connected by QR code receive their own revocable device token automatically.")
         .addText((text) => {
           text.inputEl.type = "password";
           text
-            .setPlaceholder("Worker SYNC_TOKEN")
+            .setPlaceholder("Administrator or device token")
             .setValue(settings.syncToken)
             .onChange(async (value) => {
               settings.syncToken = value.trim();
+              settings.workerCredentialKind = settings.syncToken ? "administrator" : null;
               await this.plugin.savePluginData();
             });
-        })
-        .addButton((button) => button
-          .setButtonText("Copy")
-          .onClick(async () => {
-            if (!settings.syncToken.trim()) {
-              new Notice("No SYNC_TOKEN is set.");
-              return;
+        });
+
+      if (workerSyncOperationsVisible && !this.plugin.data.onboarding.initialSyncCompleted) {
+        containerEl.createEl("h3", { text: "First sync" });
+
+        new Setting(containerEl)
+          .setName("Where are the source notes?")
+          .setDesc("Choose a direction, preview it, then explicitly start the first sync. Automatic sync stays off until it succeeds.")
+          .addDropdown((dropdown) => dropdown
+            .addOption("", "Choose a setup mode")
+            .addOption("remote", "GitHub is the source")
+            .addOption("local", "This device is the source")
+            .addOption("merge", "Safely merge both sides")
+            .setValue(this.plugin.data.onboarding.mode || "")
+            .onChange(async (value) => {
+              this.plugin.data.onboarding.mode = value === "remote" || value === "local" || value === "merge"
+                ? value
+                : null;
+              this.plugin.data.onboarding.preview = null;
+              await this.plugin.savePluginData();
+              this.display();
+            }));
+
+        const firstSyncSetting = new Setting(containerEl)
+          .setName("First sync plan")
+          .setDesc(firstSyncPreviewDescription(this.plugin.data.onboarding.preview))
+          .addButton((button) => button
+            .setButtonText("Preview")
+            .onClick(async () => {
+              const mode = this.plugin.data.onboarding.mode;
+              if (!mode) {
+                new Notice("Choose a first sync mode.");
+                return;
+              }
+              try {
+                const preview = await this.plugin.previewFirstSync(mode);
+                new Notice(`Plan ready: down ${preview.counts.download}, up ${preview.counts.upload}, conflicts ${preview.counts.conflict}.`, 8000);
+                this.display();
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to preview first sync.", 12000);
+              }
+            }));
+        if (this.plugin.data.onboarding.preview) {
+          firstSyncSetting.addButton((button) => button
+            .setCta()
+            .setButtonText("Start first sync")
+            .onClick(async () => {
+              try {
+                await this.plugin.runFirstSync();
+                this.display();
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to start first sync.", 12000);
+                this.display();
+              }
+            }));
+        }
+      }
+
+      if (isDesktop && settings.workerCredentialKind !== "device") {
+        containerEl.createEl("h3", { text: "Add a mobile device" });
+
+        new Setting(containerEl)
+          .setName("One-time pairing")
+          .setDesc("Requires the administrator SYNC_TOKEN. Creates a five-minute code; the Worker secret is never placed in the link.")
+          .addButton((button) => button
+            .setButtonText("Create pairing")
+            .onClick(async () => {
+              try {
+                await this.plugin.createMobilePairing();
+                this.display();
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to create pairing.", 12000);
+              }
+            }));
+
+        if (this.plugin.latestPairing) {
+          const pairing = this.plugin.latestPairing;
+          new Setting(containerEl)
+            .setName(`Pairing code: ${pairing.code}`)
+            .setDesc(`Expires ${new Date(pairing.expiresAt).toLocaleString()}`)
+            .addButton((button) => button
+              .setCta()
+              .setButtonText("Copy pairing link")
+              .onClick(async () => {
+                await navigator.clipboard.writeText(pairing.link);
+                new Notice("VaultBridge pairing link copied.");
+              }));
+          containerEl.createEl("code", { text: pairing.link });
+          const qrImage = containerEl.createEl("img", {
+            attr: {
+              src: pairing.qrDataUrl,
+              alt: "VaultBridge mobile pairing QR code"
             }
-            await copyToClipboard(settings.syncToken);
-            new Notice("SYNC_TOKEN copied.");
-          }))
-        .addButton((button) => button
-          .setButtonText("New token")
-          .onClick(async () => {
-            settings.syncToken = generateSecretToken();
-            await copyToClipboard(settings.syncToken);
-            await this.plugin.savePluginData();
-            new Notice("New local SYNC_TOKEN generated and copied. Replace the Cloudflare Worker secret with this exact value.");
-            this.display();
-          }))
-        .addButton((button) => button
-          .setButtonText("Open Cloudflare")
-          .onClick(() => {
-            openExternal(CLOUDFLARE_WORKERS_URL);
-          }));
+          });
+          qrImage.style.display = "block";
+          qrImage.style.width = "min(320px, 100%)";
+          qrImage.style.margin = "12px auto";
+        }
+      }
+
+      containerEl.createEl("h3", { text: "Device access" });
+      if (settings.workerCredentialKind === "device") {
+        new Setting(containerEl)
+          .setName("Disconnect this device")
+          .setDesc("Revokes this device token and removes the saved Worker connection. Local notes remain on this device.")
+          .addButton((button) => button
+            .setWarning()
+            .setButtonText("Disconnect")
+            .onClick(async () => {
+              try {
+                if (await this.plugin.disconnectCurrentDevice()) this.display();
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to disconnect this device.", 12000);
+              }
+            }));
+      } else {
+        new Setting(containerEl)
+          .setName("Paired devices")
+          .setDesc(this.deviceListError || "Administrator access token required. Review paired devices and revoke a lost or replaced device.")
+          .addButton((button) => button
+            .setButtonText(this.pairedDevices === null ? "Load devices" : "Refresh")
+            .onClick(async () => {
+              try {
+                this.deviceListError = "";
+                this.pairedDevices = await this.plugin.listPairedDevices();
+              } catch (error) {
+                this.deviceListError = error instanceof Error ? error.message : "Unable to load paired devices.";
+              }
+              this.display();
+            }));
+      }
+
+      for (const device of settings.workerCredentialKind === "device" ? [] : (this.pairedDevices || [])) {
+        const isCurrent = device.id === settings.deviceId;
+        const status = device.revokedAt
+          ? `Revoked ${formatDeviceTime(device.revokedAt)}`
+          : isCurrent
+            ? "Current device"
+            : `Last used ${device.lastUsedAt ? formatDeviceTime(device.lastUsedAt) : "never"}`;
+        const deviceSetting = new Setting(containerEl)
+          .setName(device.name)
+          .setDesc(`${status} · Added ${formatDeviceTime(device.createdAt)}`);
+        if (!device.revokedAt && !isCurrent) {
+          deviceSetting.addButton((button) => button
+            .setWarning()
+            .setButtonText("Revoke")
+            .onClick(async () => {
+              try {
+                if (await this.plugin.revokePairedDevice(device)) {
+                  this.pairedDevices = await this.plugin.listPairedDevices();
+                }
+              } catch (error) {
+                new Notice(error instanceof Error ? error.message : "Unable to revoke device.", 12000);
+              }
+              this.display();
+            }));
+        }
+      }
 
       new Setting(containerEl)
         .setName("Repository notes folder")
@@ -337,10 +493,21 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Automatic sync")
-        .setDesc("Syncs automatically when the app opens, returns to the foreground, after edits, and on a timer.")
+        .setDesc(isDesktop && !settings.desktopWorkerSyncEnabled
+          ? "Disabled because this desktop uses local Git. Enable Worker sync on desktop above to use Worker automatic sync."
+          : this.plugin.data.onboarding.initialSyncCompleted
+          ? "Syncs automatically when the app opens, returns to the foreground, after edits, and on a timer."
+          : "Unavailable until the reviewed first sync succeeds.")
         .addToggle((toggle) => toggle
-          .setValue(settings.workerAutoSync)
+          .setValue(this.plugin.data.onboarding.initialSyncCompleted && settings.workerAutoSync)
+          .setDisabled(!workerSyncOperationsVisible)
           .onChange(async (value) => {
+            if (!this.plugin.data.onboarding.initialSyncCompleted) {
+              settings.workerAutoSync = false;
+              new Notice("Complete the reviewed first sync before enabling automatic sync.");
+              this.display();
+              return;
+            }
             settings.workerAutoSync = value;
             await this.plugin.savePluginData();
             if (value) this.plugin.scheduleWorkerAutoSync();
@@ -390,14 +557,19 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Test connection")
-        .setDesc("Checks Worker health, authentication, and Protocol v2 compatibility without modifying vault files.")
+        .setDesc("Checks Worker health, authentication, repository, branch, file-size limit, Protocol v2, and D1 pairing readiness without modifying vault files.")
         .addButton((button) => button
-          .setButtonText("Test")
-          .onClick(async () => {
-            try {
-              await this.plugin.testConnection();
-              new Notice("VaultBridge Worker connection OK.");
-            } catch (error) {
+            .setButtonText("Test")
+            .onClick(async () => {
+              try {
+                const setup = await this.plugin.testConnection();
+                const repository = setup.repository?.fullName || "unknown repository";
+                const branch = setup.repository?.branch || "unknown branch";
+                const maxFileBytes = setup.limits?.maxFileBytes;
+                const limit = typeof maxFileBytes === "number" ? `, max file ${formatBytes(maxFileBytes)}` : "";
+                const pairing = setup.health.features?.devicePairing ? "pairing ready" : "pairing unavailable (D1 DB missing)";
+                new Notice(`VaultBridge connection OK: ${repository} (${branch}${limit}); ${pairing}.`, 10000);
+              } catch (error) {
               new Notice(error instanceof Error ? error.message : "Connection test failed.");
             }
           }));
@@ -504,9 +676,12 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Sync now")
-        .setDesc("Runs the manual VaultBridge sync workflow.")
+        .setDesc(workerSyncOperationsVisible
+          ? "Runs the manual VaultBridge sync workflow."
+          : "Disabled because this desktop uses local Git. Enable Worker sync on desktop to run it here.")
         .addButton((button) => button
           .setCta()
+          .setDisabled(!workerSyncOperationsVisible)
           .setButtonText("Sync now")
           .onClick(() => {
             void this.plugin.syncNow();
@@ -579,25 +754,36 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
   }
 }
 
+function formatDeviceTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024) * 10) / 10} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024 * 10) / 10} KiB`;
+  return `${bytes} B`;
+}
+
 function addPathPreview(lines: string[], label: string, paths: string[] | undefined): void {
   if (!paths || paths.length === 0) return;
   lines.push(`${label}:`);
   for (const path of paths) lines.push(`- ${path}`);
 }
 
+function firstSyncPreviewDescription(preview: InitialSyncPreview | null): string {
+  if (!preview) return "No plan yet. Preview performs a read-only scan of this vault and the remote repository.";
+  return [
+    `Local ${preview.localFiles}, remote ${preview.remoteFiles}.`,
+    `Download ${preview.counts.download}, upload ${preview.counts.upload},`,
+    `delete local ${preview.counts.deleteLocal}, delete remote ${preview.counts.deleteRemote},`,
+    `conflicts ${preview.counts.conflict}, unchanged ${preview.counts.unchanged}.`
+  ].join(" ");
+}
+
 function modelOptions(current: string, models: string[]): string[] {
   return [...new Set([current || DEFAULT_AUTO_MERGE_MODEL, ...models, ...DEFAULT_AUTO_MERGE_MODELS])]
     .filter((model) => model.trim().length > 0);
-}
-
-function generateSecretToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function copyToClipboard(value: string): Promise<void> {
-  await navigator.clipboard?.writeText(value);
 }
 
 function openExternal(url: string): void {

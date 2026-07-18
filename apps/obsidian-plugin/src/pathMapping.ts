@@ -1,4 +1,4 @@
-import { FileManifest, VaultBridgeSettings } from "./types";
+import { FileManifest, SyncPlan, SyncPlanEntry, VaultBridgeSettings } from "./types";
 import { cleanVaultPath } from "./vaultScanner";
 import { normalizeLocalPrefix, normalizeRemotePrefix } from "./settings";
 
@@ -25,6 +25,38 @@ export function localManifestToRemote(manifest: FileManifest, settings: VaultBri
     remote[localToRemotePath(path, settings)] = meta;
   }
   return remote;
+}
+
+/** Keep repository files outside the configured notes folder out of every
+ * client decision, count, and commit patch. The Worker owns the repository-wide
+ * manifest, while each plugin instance owns only its configured path mapping. */
+export function scopeSyncPlan(plan: SyncPlan, settings: VaultBridgeSettings): SyncPlan {
+  const relevant = (entries: SyncPlanEntry[]) => entries.filter((entry) =>
+    remoteToLocalPath(entry.path, settings) !== null
+  );
+  const download = relevant(plan.download);
+  const deleteLocal = relevant(plan.deleteLocal);
+  const upload = relevant(plan.upload);
+  const deleteRemote = relevant(plan.deleteRemote);
+  const conflict = relevant(plan.conflict);
+  const unchanged = relevant(plan.unchanged);
+  return {
+    ...plan,
+    download,
+    deleteLocal,
+    upload,
+    deleteRemote,
+    conflict,
+    unchanged,
+    counts: {
+      download: download.length,
+      deleteLocal: deleteLocal.length,
+      upload: upload.length,
+      deleteRemote: deleteRemote.length,
+      conflict: conflict.length,
+      unchanged: unchanged.length
+    }
+  };
 }
 
 export function isWithinLocalPrefix(localPath: string, settings: VaultBridgeSettings): boolean {

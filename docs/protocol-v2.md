@@ -18,12 +18,88 @@ The Worker reconstructs the common base from the historical Git commit. The devi
 
 ## Authentication
 
-All requests except `/health` require:
+All requests except `/health` and `POST /v2/pairing/exchange` require:
 
 ```http
-Authorization: Bearer <SYNC_TOKEN>
+Authorization: Bearer <SYNC_TOKEN_OR_DEVICE_TOKEN>
 Content-Type: application/json
 ```
+
+`SYNC_TOKEN` remains the self-hosted administrator and legacy credential. A
+paired client receives an independent random device token. Device tokens are
+stored only as SHA-256 hashes in D1, can be revoked independently, and are
+accepted by the same sync endpoints as `SYNC_TOKEN`.
+
+## Health and readiness
+
+`GET /health` is public. `coreConfigured` and `readiness.coreSync.ready`
+describe the GitHub synchronization configuration. `features.devicePairing`
+and `readiness.devicePairing.ready` are true only when the `DB` D1 binding is
+available. `configured` is true only when both capabilities are ready.
+
+## Device pairing
+
+The administrator creates a short-lived, single-use code. This endpoint only
+accepts the deployment's `SYNC_TOKEN`; a paired device token receives
+`403 administrator_required`:
+
+```http
+POST /v2/pairing/codes
+Authorization: Bearer <SYNC_TOKEN>
+Content-Type: application/json
+
+{
+  "expiresInSeconds": 300
+}
+```
+
+Response (`201 Created`):
+
+```json
+{
+  "code": "high-entropy-one-time-code",
+  "expiresAt": "2026-07-13T06:00:00.000Z"
+}
+```
+
+The new client exchanges the code without an Authorization header:
+
+```http
+POST /v2/pairing/exchange
+Content-Type: application/json
+
+{
+  "code": "high-entropy-one-time-code",
+  "deviceName": "Alice iPhone"
+}
+```
+
+The exchange request body is limited to 4 KiB.
+
+Response (`201 Created`) contains the device token exactly once:
+
+```json
+{
+  "token": "device-token",
+  "device": {
+    "id": "device-uuid",
+    "name": "Alice iPhone",
+    "createdAt": "2026-07-13T05:55:00.000Z"
+  }
+}
+```
+
+Codes expire after 5 minutes by default, accept at most 10 minutes, and cannot
+be replayed. The setup link may contain the Worker endpoint and pairing code,
+but must never contain `SYNC_TOKEN` or `GITHUB_TOKEN`.
+
+Device management endpoints:
+
+- `GET /v2/devices` lists paired devices and revocation state without token
+  hashes. It requires the administrator `SYNC_TOKEN`.
+- `DELETE /v2/devices/:id` revokes one active device and returns `204`. The
+  administrator may revoke any device; a device token may only revoke its own
+  device ID.
 
 ## Setup check
 
@@ -34,8 +110,8 @@ GET /v2/setup/check
 ```
 
 The response includes the bound GitHub repository, branch, current branch head,
-manifest path, and file-size limit. This endpoint is authenticated with the same
-`SYNC_TOKEN` as sync requests.
+manifest path, and file-size limit. This endpoint accepts either the legacy
+`SYNC_TOKEN` or an active device token.
 
 ## 1. Create a synchronization plan
 

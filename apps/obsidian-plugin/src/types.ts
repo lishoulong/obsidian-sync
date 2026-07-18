@@ -7,6 +7,7 @@ export interface DeviceState {
 export interface VaultBridgeSettings {
   workerUrl: string;
   syncToken: string;
+  workerCredentialKind: "administrator" | "device" | null;
   deviceId: string;
   localPrefix: string;
   remotePrefix: string;
@@ -32,13 +33,95 @@ export interface VaultBridgeSettings {
   desktopWorkerSyncEnabled: boolean;
 }
 
+export interface WorkerHealthResponse {
+  ok: boolean;
+  service: string;
+  protocol: number;
+  version?: string;
+  configured?: boolean;
+  coreConfigured?: boolean;
+  missingConfig?: string[];
+  readiness?: {
+    coreSync?: { ready: boolean; missing: string[] };
+    devicePairing?: { ready: boolean; missing: string[] };
+  };
+  features?: {
+    devicePairing?: boolean;
+  };
+}
+
+export interface WorkerSetupCheckResponse {
+  ok: boolean;
+  repository?: {
+    owner?: string;
+    repo?: string;
+    fullName?: string;
+    private?: boolean;
+    defaultBranch?: string;
+    branch?: string;
+    headCommitSha?: string;
+  };
+  limits?: {
+    maxFileBytes?: number;
+  };
+}
+
+export interface WorkerConnectionResult extends WorkerSetupCheckResponse {
+  health: WorkerHealthResponse;
+}
+
 export interface VaultBridgePluginData {
   settings: VaultBridgeSettings;
   deviceState: DeviceState | null;
   lastResult: SyncResult | null;
+  onboarding: OnboardingState;
   pendingConflicts?: Record<string, PendingConflict>;
   pendingDesktopGitConflict?: DesktopGitConflictState | null;
   hashCache?: Record<string, HashCacheEntry>;
+}
+
+export type InitialSyncMode = "remote" | "local" | "merge";
+
+export interface InitialSyncPreview {
+  mode: InitialSyncMode;
+  localFiles: number;
+  remoteFiles: number;
+  remoteCommitSha: string;
+  planDigest: string;
+  counts: SyncCounts;
+  createdAt: string;
+}
+
+export interface OnboardingState {
+  initialSyncCompleted: boolean;
+  mode: InitialSyncMode | null;
+  preview: InitialSyncPreview | null;
+}
+
+export interface PairingCodeResponse {
+  code: string;
+  expiresAt: string;
+}
+
+export interface PairingExchangeResponse {
+  token: string;
+  device: {
+    id: string;
+    name: string;
+    createdAt: string;
+  };
+}
+
+export interface PairedDevice {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface DeviceListResponse {
+  devices: PairedDevice[];
 }
 
 export interface HashCacheEntry {

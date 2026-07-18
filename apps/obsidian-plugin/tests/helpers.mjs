@@ -42,6 +42,7 @@ export async function buildTestModules() {
     absWorkingDir: repoRoot,
     entryPoints: {
       autoMerge: "src/autoMerge.ts",
+      onboarding: "src/onboarding.ts",
       syncEngine: "src/syncEngine.ts"
     },
     bundle: true,
@@ -59,6 +60,7 @@ export async function buildTestModules() {
 
   return {
     autoMerge: path.join(outdir, "autoMerge.js"),
+    onboarding: path.join(outdir, "onboarding.js"),
     syncEngine: path.join(outdir, "syncEngine.js")
   };
 }
@@ -267,6 +269,7 @@ export function testData(overrides = {}) {
     settings: testSettings(overrides),
     deviceState: { version: 2, deviceId: "test-device", lastSyncedCommitSha: "base-1" },
     lastResult: null,
+    onboarding: { initialSyncCompleted: true, mode: null, preview: null },
     pendingConflicts: {},
     pendingDesktopGitConflict: null
   };
@@ -276,6 +279,7 @@ export function testSettings(overrides = {}) {
   return {
     workerUrl: "https://worker.test",
     syncToken: "sync-token",
+    workerCredentialKind: "administrator",
     deviceId: "test-device",
     localPrefix: "",
     remotePrefix: "",

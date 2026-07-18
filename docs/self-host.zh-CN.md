@@ -11,6 +11,8 @@
    - 放在 `vault/` 子目录：远端前缀填 `vault/`。
 4. 创建 GitHub Personal Access Token。
 
+新建仓库准备从本机首次上传时，建议初始化 README，并使用 `vault/` 作为笔记目录。README 提供分支的首个 Commit，而 `vault/` 仍为空，可安全执行“这台设备是初始版本”。完全空、没有 HEAD Commit 的仓库当前无法同步。
+
 推荐使用 Fine-grained token，并只授权目标仓库：
 
 - Repository access：只选你的 Vault 仓库。
@@ -20,6 +22,8 @@
 不要把 GitHub token 填进 Obsidian 插件或仓库文件。它只应该存在于 Cloudflare Worker secret `GITHUB_TOKEN` 中。
 
 ## 2. 配置 Cloudflare Worker
+
+如果希望避免本地命令行，优先使用项目首页的 **Deploy to Cloudflare** 按钮。Cloudflare 会从 `apps/worker` 模板创建独立仓库、自动创建 D1 并部署 Worker。下面的 Wrangler 流程用于手动部署和高级配置。
 
 安装依赖并登录 Cloudflare：
 
@@ -43,6 +47,14 @@ cp wrangler.example.jsonc wrangler.jsonc
   "name": "vaultbridge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vaultbridge",
+      "database_id": "<your-d1-database-id>",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     "GITHUB_OWNER": "your-github-user-or-org",
     "GITHUB_REPO": "your-vault-repo",
@@ -51,6 +63,23 @@ cp wrangler.example.jsonc wrangler.jsonc
   }
 }
 ```
+
+先创建用于一次性配对码和设备凭证的 D1 数据库：
+
+```bash
+pnpm exec wrangler d1 create vaultbridge
+```
+
+`DB` 只保存配对码和设备 Token 的哈希，不保存笔记或 GitHub Token。公共
+模板的 `wrangler.jsonc` 保留全零 ID，供 Deploy Button 自动创建资源；已有
+Worker 的手动部署不要把个人 ID 提交到公共模板，而是在部署环境提供：
+
+```bash
+export D1_DATABASE_ID="<wrangler d1 create 返回的 database_id>"
+```
+
+GitHub Actions 将它配置为仓库 Variable `D1_DATABASE_ID`。Cloudflare Workers
+Builds 则把它配置为构建阶段的变量；它不是 Worker 运行时变量，也不是秘密。
 
 也可以使用单个变量：
 
@@ -82,7 +111,7 @@ pnpm exec wrangler secret put SYNC_TOKEN
 openssl rand -base64 32
 ```
 
-部署：
+部署。`deploy` 会先执行 D1 migration，再发布 Worker：
 
 ```bash
 pnpm deploy
@@ -94,7 +123,9 @@ pnpm deploy
 GET https://<your-worker>.<your-subdomain>.workers.dev/health
 ```
 
-成功时应看到 `service: "vaultbridge"`、`version: "0.3.3"`、`protocol: 2`。
+成功时应看到 `service: "vaultbridge"`、`version: "0.4.0"`、`protocol: 2`、
+`configured: true`，且 `readiness.coreSync.ready` 和
+`readiness.devicePairing.ready` 都为 `true`。
 
 进一步验证 Worker secrets、GitHub token、仓库和分支配置：
 
@@ -122,21 +153,29 @@ pnpm dev
 插件设置页名称为 `VaultBridge Sync`。关键字段如下：
 
 - `Worker URL`：你的 Worker 地址，例如 `https://vaultbridge.example.workers.dev`，末尾不要带 `/`。
-- `SYNC_TOKEN`：与 Worker secret `SYNC_TOKEN` 完全一致。
-- `Device ID`：每台设备稳定且唯一，例如 `alice-iphone`、`alice-macbook`。允许字母、数字、点、下划线、连字符，长度 2-64。
-- `Maximum file size`：客户端侧单文件上限，建议与 Worker 的 `MAX_FILE_BYTES` 保持一致。
-- `Remote path prefix`：仓库内 Vault 文件所在目录。
-- `Local path prefix`：当前 Obsidian vault 内需要同步的子目录。
+- `Worker access token`：第一台管理设备填写 Worker secret `SYNC_TOKEN`；配对设备会自动保存独立设备 Token。
+- `Repository notes folder`：仓库内 Vault 文件所在目录。
+- `Local notes folder`：当前 Obsidian vault 内需要同步的子目录。
+- `First sync`：选择数据源并预览下载、上传、冲突和删除数量。
 
 常见路径配置：
 
-| 使用方式 | Remote path prefix | Local path prefix |
+| 使用方式 | Repository notes folder | Local notes folder |
 | --- | --- | --- |
 | GitHub 仓库根目录就是笔记 | 留空 | 留空 |
 | GitHub 仓库用 `vault/` 保存笔记，Obsidian 打开的是笔记目录 | `vault/` | 留空 |
 | Obsidian 桌面端打开的是 Git 仓库根目录，笔记在本地 `vault/` | `vault/` | `vault/` |
 
 插件会把设备状态保存在 Obsidian 插件数据中，不需要你手动提交 `device-state.json`。桌面端可选开启 Git commit/push；移动端不会直接操作本地 Git。
+
+第一台桌面设备可以使用管理员 `SYNC_TOKEN` 连接。连接成功后，建议使用
+插件的 **Add mobile device** 创建短期配对码；新设备兑换后获得独立、可
+撤销的设备 Token，不需要再次复制全局 `SYNC_TOKEN`。创建配对码、查看
+完整设备列表和撤销其他设备仍需要管理员 `SYNC_TOKEN`；配对设备只能撤销
+自身。
+配对设备可以使用 **Disconnect this device** 撤销自身凭证；本地笔记不会被
+删除。桌面端默认使用本地 Git，只有主动开启 **Enable Worker sync on
+desktop** 后才显示桌面 Worker 首次同步控件。
 
 ## 5. 首次同步建议
 
@@ -150,16 +189,23 @@ pnpm dev
 
 1. 先备份本地 Vault 和 GitHub 仓库。
 2. 先点插件里的 `Test connection` 或请求 `/health`。
-3. 第一次只做手动同步，不要先开自动化。
-4. 检查 `.remote-conflict-...` 文件，确认冲突处理符合预期。
-5. 确认 Pull、Push、删除、冲突副本都正常后，再开启插件自动同步或桌面自动 Git push。
+3. 在首次设置向导中选择“GitHub 是初始版本”“这台设备是初始版本”或“安全合并”，检查同步预览。
+4. 第一次只做手动同步；首次完成前插件不会启用自动化。
+5. 检查 `.remote-conflict-...` 文件，确认冲突处理符合预期。
+6. 确认 Pull、Push、删除、冲突副本都正常后，再开启插件自动同步或桌面自动 Git push。
 
 ## 6. 安全和排错
 
 - `GITHUB_TOKEN` 权限越小越好，只给目标仓库 Contents 读写。
+- VaultBridge 要求目标 GitHub 仓库为 Private；插件在首次同步和配对确认前
+  会拒绝公开仓库。
 - `SYNC_TOKEN` 泄露后，任何人都可能通过你的 Worker 改写目标仓库；泄露时应立即重置 Worker secret。
+- 配对码默认 5 分钟过期且只能兑换一次；不要把长期 `SYNC_TOKEN` 或 `GITHUB_TOKEN` 放进配对链接。
+- 丢失设备时，在保存管理员 `SYNC_TOKEN` 的设备列表中只撤销该设备 Token。
 - `.vaultbridge/` 是 Worker 内部目录，客户端不应上传或编辑。
 - 如果同步提示 `missing_config`，检查 Worker vars/secrets 是否已设置。
-- 如果提示 `unauthorized`，检查客户端 `SYNC_TOKEN` 是否与 Worker secret 完全一致。
+- 如果管理员设备提示 `unauthorized`，检查 Worker access token 是否与 Worker
+  secret `SYNC_TOKEN` 完全一致；二维码配对设备不要手动替换自动保存的设备
+  Token。
 - 如果提示 `sync_session_stale`，说明生成同步计划后远端分支又变化了，重新同步即可。
 - 如果第一次大型仓库较慢，通常是 Worker 需要从 GitHub tree 重建 `.vaultbridge/manifest.json`。

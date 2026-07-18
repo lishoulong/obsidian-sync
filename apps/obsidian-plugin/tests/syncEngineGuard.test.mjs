@@ -130,3 +130,38 @@ test("guard is disabled when the threshold is zero", async () => {
   assert.equal(result.counts.deletedRemote, 3);
   assert.equal(fetchLog.commitCalls, 1);
 });
+
+test("sync never deletes repository files outside the configured notes folder", async () => {
+  const modules = await buildTestModules();
+  const { SyncEngine } = await import(pathToFileURL(modules.syncEngine).href);
+  const vault = new MemoryVault({ "note.md": "keep\n" });
+  const fetchLog = installSyncFetch({
+    plans: [
+      makePlan({
+        remoteCommitSha: "remote-1",
+        sessionToken: "session-1",
+        unchanged: [{ path: "vault/note.md" }, { path: "README.md" }]
+      }),
+      makePlan({
+        remoteCommitSha: "remote-1",
+        sessionToken: "session-2",
+        deleteRemote: [{ path: "README.md" }],
+        unchanged: [{ path: "vault/note.md" }]
+      })
+    ],
+    remoteFiles: {}
+  });
+  const data = testData({ remotePrefix: "vault/" });
+
+  const result = await new SyncEngine({
+    vault,
+    fileManager: {},
+    data,
+    saveData: async () => {},
+    updateStatus: () => {}
+  }).syncNow();
+
+  assert.equal(result.status, "success");
+  assert.equal(result.counts.deletedRemote, 0);
+  assert.equal(fetchLog.commitCalls, 0);
+});

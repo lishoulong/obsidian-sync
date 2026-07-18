@@ -2,6 +2,9 @@ node_modules/
 .codex/
 .DS_Store
 npm-debug.log*
-.dev.vars
-.env
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
 .wrangler/
+.wrangler.deploy.*.jsonc

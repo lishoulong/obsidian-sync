@@ -3,7 +3,7 @@ import { base64ToArrayBuffer } from "./encoding";
 import { makeDeviceState, validateRequiredSettings } from "./settings";
 import { sameMeta, scanVault, readFileMeta, sha256Hex, ScanResult } from "./vaultScanner";
 import { isExcluded } from "./vaultScanner";
-import { localManifestToRemote, remoteToLocalPath } from "./pathMapping";
+import { localManifestToRemote, remoteToLocalPath, scopeSyncPlan } from "./pathMapping";
 import { stateCommitSha, syncMessage, WorkerClient } from "./workerClient";
 import { canApplyAutoMergeResult, canAutoMergePath, requestAutoMerge, validateAutoMergeSettings } from "./autoMerge";
 import {
@@ -68,7 +68,10 @@ export class SyncEngine {
     this.data.pendingConflicts = this.data.pendingConflicts || {};
 
     this.updateStatus("Checking remote changes...");
-    const pullPlan = await client.syncCheck(deviceId, baseSha, initialRemoteManifest);
+    const pullPlan = scopeSyncPlan(
+      await client.syncCheck(deviceId, baseSha, initialRemoteManifest),
+      this.data.settings
+    );
     const diagnostics = this.createDiagnostics(initialScan, baseSha, pullPlan);
     if (!this.quiet) {
       new Notice(`VaultBridge plan: down ${pullPlan.counts.download}, delete ${pullPlan.counts.deleteLocal}, up ${pullPlan.counts.upload}, conflicts ${pullPlan.counts.conflict}.`, 8000);
@@ -140,7 +143,10 @@ export class SyncEngine {
     let postPullRemoteManifest = localManifestToRemote(postPullScan.manifest, this.data.settings);
     diagnostics.phase = "push_plan";
     let pushPlanBaseSha = resolvedConflicts.length > 0 ? pullPlan.remoteCommitSha : (baseSha || pullPlan.remoteCommitSha);
-    let pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
+    let pushPlan = scopeSyncPlan(
+      await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest),
+      this.data.settings
+    );
     diagnostics.pushCounts = pushPlan.counts;
     addRequestId(diagnostics, pushPlan.requestId);
     diagnostics.uploadPaths = previewPaths(pushPlan.upload);
@@ -166,7 +172,10 @@ export class SyncEngine {
       if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
         diagnostics.phase = "push_plan_after_resolved_conflicts";
         pushPlanBaseSha = pushPlan.remoteCommitSha;
-        pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
+        pushPlan = scopeSyncPlan(
+          await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest),
+          this.data.settings
+        );
         diagnostics.pushCounts = pushPlan.counts;
         addRequestId(diagnostics, pushPlan.requestId);
         diagnostics.uploadPaths = previewPaths(pushPlan.upload);
@@ -193,7 +202,10 @@ export class SyncEngine {
       if (pushConflictState.unresolved.length === 0 && pushConflictState.resolved.length > 0) {
         diagnostics.phase = "push_plan_after_retry_resolved_conflicts";
         pushPlanBaseSha = pushPlan.remoteCommitSha;
-        pushPlan = await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest);
+        pushPlan = scopeSyncPlan(
+          await client.syncCheck(deviceId, pushPlanBaseSha, postPullRemoteManifest),
+          this.data.settings
+        );
         diagnostics.pushCounts = pushPlan.counts;
         addRequestId(diagnostics, pushPlan.requestId);
         diagnostics.uploadPaths = previewPaths(pushPlan.upload);

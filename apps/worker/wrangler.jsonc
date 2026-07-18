@@ -3,10 +3,16 @@
   "name": "vaultbridge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
-  "vars": {
-    "GITHUB_OWNER": "lishoulong",
-    "GITHUB_REPO": "obsidian-note",
-    "GITHUB_BRANCH": "main",
-    "MAX_FILE_BYTES": "20971520"
-  }
+  "keep_vars": true,
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vaultbridge",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
 }

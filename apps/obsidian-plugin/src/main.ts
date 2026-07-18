@@ -16,10 +16,20 @@ import {
   validateRequiredSettings
 } from "./settings";
 import { SyncEngine, showResultNotice } from "./syncEngine";
-import { SyncResult, VaultBridgeError, VaultBridgePluginData } from "./types";
+import { SyncResult, VaultBridgeError, VaultBridgePluginData, WorkerConnectionResult } from "./types";
 import { WorkerClient } from "./workerClient";
 import { autoMergeDesktopGitConflict, continueDesktopGitConflict, desktopGitCommitPush, desktopGitPull, inspectDesktopGitConflict, DesktopGitConflictError } from "./desktopGit";
 import { ConflictListModal } from "./conflictModal";
+import { confirmCurrentDeviceDisconnect, confirmDeviceRevocation, confirmPairingTarget } from "./confirmModal";
+import {
+  assertPrivateRepository,
+  makePairingDeepLink,
+  previewInitialSync,
+  validatePairingEndpoint
+} from "./onboarding";
+import type { InitialSyncMode, InitialSyncPreview } from "./types";
+import type { PairedDevice } from "./types";
+import { createPairingQrDataUrl } from "./pairingQr";
 
 export default class VaultBridgeSyncPlugin extends Plugin {
   data: VaultBridgePluginData = createDefaultData();
@@ -36,9 +46,14 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   private lastGitPullAttemptAt = 0;
   private autoGitPullDisabledForSession = false;
   private largeDeleteApproved = false;
+  latestPairing: { code: string; link: string; qrDataUrl: string; expiresAt: string } | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
+
+    this.registerObsidianProtocolHandler("vaultbridge-connect", (params) => {
+      void this.handlePairingLink(params);
+    });
 
     if (Platform.isDesktopApp) {
       this.statusBarEl = this.addStatusBarItem();
@@ -98,7 +113,7 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       name: "Test Worker connection",
       callback: () => {
         void this.testConnection()
-          .then(() => new Notice("VaultBridge Worker connection OK."))
+          .then((setup) => new Notice(connectionSummary(setup), 10000))
           .catch((error) => new Notice(formatError(error), 10000));
       }
     });
@@ -209,7 +224,9 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   }
 
   private workerAutoSyncEnabled(): boolean {
-    return this.workerSyncAvailable() && this.data.settings.workerAutoSync;
+    return this.workerSyncAvailable()
+      && this.data.onboarding.initialSyncCompleted
+      && this.data.settings.workerAutoSync;
   }
 
   private registerWorkerAutoSync(): void {
@@ -264,6 +281,9 @@ export default class VaultBridgeSyncPlugin extends Plugin {
   async loadPluginData(): Promise<void> {
     const loaded = await this.loadData() as Partial<VaultBridgePluginData> | null;
     const settings = { ...DEFAULT_SETTINGS, ...(loaded?.settings || {}) };
+    if (loaded?.settings?.syncToken && loaded.settings.workerCredentialKind === undefined) {
+      settings.workerCredentialKind = "administrator";
+    }
     if (!settings.autoMergeEndpoint || settings.autoMergeEndpoint === "https://api.openai.com/v1/chat/completions") {
       settings.autoMergeEndpoint = DEFAULT_AUTO_MERGE_BASE_URL;
     } else {
@@ -278,6 +298,13 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       settings,
       deviceState: loaded?.deviceState || null,
       lastResult: loaded?.lastResult || null,
+      onboarding: loaded?.onboarding || {
+        // Data written by older releases had no onboarding field. Preserve its
+        // existing sync behavior when it already contains a complete Worker config.
+        initialSyncCompleted: Boolean(loaded?.settings?.workerUrl && loaded?.settings?.syncToken),
+        mode: null,
+        preview: null
+      },
       pendingConflicts: loaded?.pendingConflicts || {},
       pendingDesktopGitConflict: loaded?.pendingDesktopGitConflict || null,
       hashCache: loaded?.hashCache || {}
@@ -289,15 +316,168 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     await this.saveData(this.data);
   }
 
-  async testConnection(): Promise<void> {
-    this.requireWorkerSyncEnabled();
+  async testConnection(): Promise<WorkerConnectionResult> {
     validateRequiredSettings(this.data.settings);
     const client = new WorkerClient(this.data.settings);
     const health = await client.health();
     if (!health.ok || health.service !== "vaultbridge" || health.protocol !== 2) {
       throw new Error("Worker is reachable but does not report VaultBridge Protocol v2.");
     }
-    await client.setupCheck();
+    const setup = await client.setupCheck();
+    assertPrivateRepository(setup);
+    return { ...setup, health };
+  }
+
+  async previewFirstSync(mode: InitialSyncMode): Promise<InitialSyncPreview> {
+    this.requireWorkerSyncEnabled();
+    validateRequiredSettings(this.data.settings);
+    await this.testConnection();
+    const preview = await previewInitialSync(this.app.vault, this.data, mode);
+    this.data.onboarding.mode = mode;
+    this.data.onboarding.preview = preview;
+    await this.savePluginData();
+    return preview;
+  }
+
+  async runFirstSync(): Promise<void> {
+    const stored = this.data.onboarding.preview;
+    const mode = this.data.onboarding.mode;
+    if (!stored || !mode || stored.mode !== mode) {
+      throw new Error("Preview the first sync plan before starting it.");
+    }
+    const fresh = await previewInitialSync(this.app.vault, this.data, mode);
+    this.data.onboarding.preview = fresh;
+    await this.savePluginData();
+    if (!sameInitialPreview(stored, fresh)) {
+      throw new Error("The first sync plan changed. Review the updated preview, then start again.");
+    }
+    await this.syncNow({ initial: true });
+  }
+
+  async createMobilePairing(): Promise<void> {
+    validateRequiredSettings(this.data.settings);
+    const connection = await this.testConnection();
+    const client = new WorkerClient(this.data.settings);
+    const health = connection.health;
+    if (!health.features?.devicePairing) {
+      throw new Error("Device pairing is unavailable because this Worker has no D1 database binding. Add the DB binding, deploy the Worker again, then retry.");
+    }
+    const pairing = await client.createPairingCode();
+    const link = makePairingDeepLink(this.data.settings.workerUrl, pairing.code);
+    this.latestPairing = {
+      code: pairing.code,
+      expiresAt: pairing.expiresAt,
+      link,
+      qrDataUrl: await createPairingQrDataUrl(link)
+    };
+  }
+
+  async listPairedDevices(): Promise<PairedDevice[]> {
+    validateRequiredSettings(this.data.settings);
+    return (await new WorkerClient(this.data.settings).listDevices()).devices;
+  }
+
+  async revokePairedDevice(device: PairedDevice): Promise<boolean> {
+    if (device.id === this.data.settings.deviceId) {
+      new Notice("The current device cannot revoke itself from this screen.", 8000);
+      return false;
+    }
+    if (device.revokedAt) return false;
+    if (!await confirmDeviceRevocation(this.app, device.name)) return false;
+    await new WorkerClient(this.data.settings).revokeDevice(device.id);
+    new Notice(`${device.name} was revoked.`);
+    return true;
+  }
+
+  async disconnectCurrentDevice(): Promise<boolean> {
+    validateRequiredSettings(this.data.settings);
+    if (!await confirmCurrentDeviceDisconnect(this.app)) return false;
+
+    await new WorkerClient(this.data.settings).revokeDevice(this.data.settings.deviceId);
+    this.data.settings.workerUrl = "";
+    this.data.settings.syncToken = "";
+    this.data.settings.workerCredentialKind = null;
+    this.data.settings.workerAutoSync = false;
+    this.data.deviceState = null;
+    this.data.onboarding = {
+      initialSyncCompleted: false,
+      mode: null,
+      preview: null
+    };
+    this.data.pendingConflicts = {};
+    this.latestPairing = null;
+    await this.savePluginData();
+    new Notice("This device was disconnected. Local notes were not changed.");
+    return true;
+  }
+
+  private async handlePairingLink(params: Record<string, string>): Promise<void> {
+    let issuedClient: WorkerClient | null = null;
+    let issuedDeviceId: string | null = null;
+    const previousData = this.data;
+    let replacedData = false;
+    try {
+      const endpoint = validatePairingEndpoint(params.endpoint || "");
+      const code = (params.code || "").trim();
+      if (!code) throw new Error("Pairing link is missing its one-time code.");
+
+      const candidateSettings = {
+        ...this.data.settings,
+        workerUrl: endpoint,
+        syncToken: ""
+      };
+      const exchange = await new WorkerClient(candidateSettings).exchangePairingCode(
+        code,
+        this.app.vault.getName()
+      );
+      candidateSettings.syncToken = exchange.token;
+      candidateSettings.workerCredentialKind = "device";
+      candidateSettings.deviceId = exchange.device.id;
+      const client = new WorkerClient(candidateSettings);
+      issuedClient = client;
+      issuedDeviceId = exchange.device.id;
+      const health = await client.health();
+      if (!health.ok || health.service !== "vaultbridge" || health.protocol !== 2) {
+        throw new Error("Paired Worker does not report VaultBridge Protocol v2.");
+      }
+      const setup = await client.setupCheck();
+      assertPrivateRepository(setup);
+      const repository = setup.repository?.fullName || "Unknown repository";
+      const branch = setup.repository?.branch || "Unknown branch";
+      const confirmed = await confirmPairingTarget(this.app, {
+        workerOrigin: endpoint,
+        repository,
+        branch
+      });
+      if (!confirmed) {
+        await revokeIssuedPairing(client, exchange.device.id);
+        issuedDeviceId = null;
+        new Notice("VaultBridge pairing cancelled.");
+        return;
+      }
+
+      this.data = {
+        ...this.data,
+        settings: {
+          ...candidateSettings,
+          workerAutoSync: false
+        },
+        deviceState: makeDeviceState(candidateSettings, null),
+        onboarding: {
+          initialSyncCompleted: false,
+          mode: null,
+          preview: null
+        }
+      };
+      replacedData = true;
+      await this.savePluginData();
+      issuedDeviceId = null;
+      new Notice("VaultBridge paired. Open settings to preview the first sync.", 10000);
+    } catch (error) {
+      if (replacedData) this.data = previousData;
+      if (issuedClient && issuedDeviceId) await revokeIssuedPairing(issuedClient, issuedDeviceId);
+      new Notice(`VaultBridge pairing failed: ${formatError(error)}`, 12000);
+    }
   }
 
   async runAutoMergeTest(): Promise<void> {
@@ -336,8 +516,9 @@ export default class VaultBridgeSyncPlugin extends Plugin {
     }
   }
 
-  async syncNow(options: { auto?: boolean } = {}): Promise<void> {
+  async syncNow(options: { auto?: boolean; initial?: boolean } = {}): Promise<void> {
     const auto = options.auto === true;
+    const initial = options.initial === true;
     try {
       this.requireWorkerSyncEnabled();
     } catch (error) {
@@ -354,6 +535,11 @@ export default class VaultBridgeSyncPlugin extends Plugin {
       validateRequiredSettings(this.data.settings);
     } catch (error) {
       if (!auto) new Notice(formatError(error), 10000);
+      return;
+    }
+
+    if (!this.data.onboarding.initialSyncCompleted && !initial) {
+      if (!auto) new Notice("Preview and start the first sync from VaultBridge settings.", 10000);
       return;
     }
 
@@ -380,7 +566,15 @@ export default class VaultBridgeSyncPlugin extends Plugin {
         largeDeleteApproved: this.largeDeleteApproved
       });
       const result = await engine.syncNow();
-      if (result.status === "success") this.largeDeleteApproved = false;
+      if (result.status === "success") {
+        this.largeDeleteApproved = false;
+        if (!this.data.onboarding.initialSyncCompleted) {
+          this.data.onboarding.initialSyncCompleted = true;
+          this.data.onboarding.preview = null;
+          this.data.settings.workerAutoSync = true;
+          await this.savePluginData();
+        }
+      }
       if (auto) this.notifyAutoResult(result);
       else showResultNotice(result);
     } catch (error) {
@@ -664,4 +858,32 @@ function formatError(error: unknown): string {
   if (error instanceof VaultBridgeError) return `${error.message} (${error.code})`;
   if (error instanceof Error) return error.message.replace(/Bearer\s+\S+/g, "Bearer [redacted]");
   return "VaultBridge sync failed.";
+}
+
+export function connectionSummary(setup: WorkerConnectionResult): string {
+  const repository = setup.repository?.fullName || "unknown repository";
+  const branch = setup.repository?.branch || "unknown branch";
+  const maxFileBytes = setup.limits?.maxFileBytes;
+  const limit = typeof maxFileBytes === "number" ? `, max file ${formatBytes(maxFileBytes)}` : "";
+  const pairing = setup.health.features?.devicePairing ? "pairing ready" : "pairing unavailable (D1 DB missing)";
+  return `VaultBridge connection OK: ${repository} (${branch}${limit}); ${pairing}.`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024) * 10) / 10} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024 * 10) / 10} KiB`;
+  return `${bytes} B`;
+}
+
+async function revokeIssuedPairing(client: WorkerClient, deviceId: string): Promise<void> {
+  try {
+    await client.revokeDevice(deviceId);
+  } catch (error) {
+    console.warn("VaultBridge could not revoke an unused pairing credential:", formatError(error));
+  }
+}
+
+function sameInitialPreview(left: InitialSyncPreview, right: InitialSyncPreview): boolean {
+  return left.mode === right.mode
+    && left.planDigest === right.planDigest;
 }

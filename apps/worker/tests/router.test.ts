@@ -17,7 +17,47 @@ test("health is public and describes Protocol v2", async () => {
   assert.equal(body.service, "vaultbridge");
   assert.equal(body.protocol, 2);
   assert.equal(body.configured, false);
+  assert.equal(body.coreConfigured, false);
+  assert.deepEqual(body.missingConfig, [
+    "SYNC_TOKEN",
+    "GITHUB_TOKEN",
+    "GITHUB_OWNER or GITHUB_REPOSITORY",
+    "GITHUB_REPO or GITHUB_REPOSITORY",
+    "DB",
+  ]);
+  assert.deepEqual(body.readiness, {
+    coreSync: {
+      ready: false,
+      missing: [
+        "SYNC_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_OWNER or GITHUB_REPOSITORY",
+        "GITHUB_REPO or GITHUB_REPOSITORY",
+      ],
+    },
+    devicePairing: { ready: false, missing: ["DB"] },
+  });
   assert.equal(typeof body.requestId, "string");
+});
+
+test("health distinguishes core sync configuration from D1 pairing readiness", async () => {
+  const env: Env = {
+    SYNC_TOKEN: "secret",
+    GITHUB_TOKEN: "github-secret",
+    GITHUB_OWNER: "owner",
+    GITHUB_REPO: "notes",
+  };
+  const response = await worker.fetch(request("/health"), env);
+  const body = (await response.json()) as Record<string, unknown>;
+
+  assert.equal(body.configured, false);
+  assert.equal(body.coreConfigured, true);
+  assert.deepEqual(body.missingConfig, ["DB"]);
+  assert.deepEqual(body.features, { devicePairing: false });
+  assert.deepEqual(body.readiness, {
+    coreSync: { ready: true, missing: [] },
+    devicePairing: { ready: false, missing: ["DB"] },
+  });
 });
 
 test("OPTIONS returns the CORS preflight response without authentication", async () => {
@@ -30,7 +70,7 @@ test("OPTIONS returns the CORS preflight response without authentication", async
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
   assert.equal(
     response.headers.get("access-control-allow-methods"),
-    "GET, POST, OPTIONS",
+    "GET, POST, DELETE, OPTIONS",
   );
 });
 

@@ -3,6 +3,17 @@
   "name": "vaultbridge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vaultbridge",
+      "database_id": "replace-with-your-d1-database-id",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     // Either set GITHUB_REPOSITORY or set GITHUB_OWNER + GITHUB_REPO.
     "GITHUB_REPOSITORY": "your-github-user/your-obsidian-repo",

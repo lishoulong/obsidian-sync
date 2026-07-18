@@ -1,3 +1,10 @@
-# Local wrangler dev only. Do not put real tokens in committed files.
-GITHUB_TOKEN=replace-with-a-github-token-for-local-dev
-SYNC_TOKEN=replace-with-a-random-local-sync-token
+# Required Worker configuration. Never commit real values.
+GITHUB_OWNER=your-github-user-or-org
+GITHUB_REPO=your-private-notes-repository
+GITHUB_BRANCH=main
+MAX_FILE_BYTES=20971520
+
+# Secrets. GITHUB_TOKEN should only grant the selected notes repository
+# Contents read/write. Generate SYNC_TOKEN with: openssl rand -base64 32
+GITHUB_TOKEN=replace-with-a-fine-grained-github-token
+SYNC_TOKEN=replace-with-a-random-sync-token
