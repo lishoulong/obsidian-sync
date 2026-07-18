@@ -1,4 +1,5 @@
 import { arrayBufferToBase64 } from "./encoding";
+import { requestUrl, type RequestUrlResponse } from "obsidian";
 import {
   BlobEntry,
   CommitResponse,
@@ -24,10 +25,16 @@ const RETRYABLE_HTTP_STATUS = new Set([429, 500, 502, 503, 504]);
 export class WorkerClient {
   private settings: VaultBridgeSettings;
   private retryDelaysMs: number[];
+  private requestTimeoutMs: number;
 
-  constructor(settings: VaultBridgeSettings, retryDelaysMs: number[] = DEFAULT_RETRY_DELAYS_MS) {
+  constructor(
+    settings: VaultBridgeSettings,
+    retryDelaysMs: number[] = DEFAULT_RETRY_DELAYS_MS,
+    requestTimeoutMs = REQUEST_TIMEOUT_MS
+  ) {
     this.settings = settings;
     this.retryDelaysMs = retryDelaysMs;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async health(): Promise<{ ok: boolean; service: string; protocol: number; version?: string }> {
@@ -85,27 +92,24 @@ export class WorkerClient {
     const headers: Record<string, string> = {};
     if (authenticated) headers.authorization = `Bearer ${this.settings.syncToken}`;
 
-    let response: Response;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let response: RequestUrlResponse;
     try {
-      response = await fetch(url, {
+      response = await withTimeout(requestUrl({
+        url,
         method,
         headers: {
           ...headers,
           "content-type": "application/json"
         },
         body: body == null ? undefined : JSON.stringify(body),
-        signal: controller.signal
-      });
+        throw: false
+      }), this.requestTimeoutMs, `${method} ${path}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Network request failed.";
       throw new VaultBridgeError("network_error", `${method} ${path} failed: ${message}`);
-    } finally {
-      clearTimeout(timeout);
     }
 
-    const text = await response.text();
+    const text = response.text;
     const parsed = parseJson(text);
     if (response.status < 200 || response.status >= 300) {
       const requestHint = parsed.requestId ? ` [requestId ${parsed.requestId}]` : "";
@@ -117,6 +121,22 @@ export class WorkerClient {
 
     return parsed as T;
   }
+}
+
+function withTimeout<T>(request: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs);
+    request.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }
 
 const RETRYABLE_MARKER = Symbol("vaultbridge-retryable");

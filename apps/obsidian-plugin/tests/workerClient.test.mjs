@@ -11,10 +11,10 @@ const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 test("syncCheck retries transient network failures", async () => {
   const { WorkerClient } = await loadWorkerClient();
   let calls = 0;
-  installFetch(async () => {
+  installRequestUrl(async () => {
     calls += 1;
     if (calls < 3) throw new TypeError("fetch failed");
-    return jsonResponse({ protocol: 2, remoteCommitSha: "abc" });
+    return jsonRequestResponse({ protocol: 2, remoteCommitSha: "abc" });
   });
 
   const client = new WorkerClient(testSettings(), [1, 1, 1]);
@@ -27,10 +27,10 @@ test("syncCheck retries transient network failures", async () => {
 test("syncCheck retries retryable HTTP statuses", async () => {
   const { WorkerClient } = await loadWorkerClient();
   let calls = 0;
-  installFetch(async () => {
+  installRequestUrl(async () => {
     calls += 1;
-    if (calls === 1) return jsonResponse({ error: "upstream", message: "bad gateway" }, 502);
-    return jsonResponse({ protocol: 2, remoteCommitSha: "abc" });
+    if (calls === 1) return jsonRequestResponse({ error: "upstream", message: "bad gateway" }, 502);
+    return jsonRequestResponse({ protocol: 2, remoteCommitSha: "abc" });
   });
 
   const client = new WorkerClient(testSettings(), [1, 1, 1]);
@@ -43,9 +43,9 @@ test("syncCheck retries retryable HTTP statuses", async () => {
 test("syncCheck does not retry authentication failures", async () => {
   const { WorkerClient } = await loadWorkerClient();
   let calls = 0;
-  installFetch(async () => {
+  installRequestUrl(async () => {
     calls += 1;
-    return jsonResponse({ error: "unauthorized", message: "bad token" }, 401);
+    return jsonRequestResponse({ error: "unauthorized", message: "bad token" }, 401);
   });
 
   const client = new WorkerClient(testSettings(), [1, 1, 1]);
@@ -56,7 +56,7 @@ test("syncCheck does not retry authentication failures", async () => {
 test("syncCheck surfaces the last error after retries are exhausted", async () => {
   const { WorkerClient } = await loadWorkerClient();
   let calls = 0;
-  installFetch(async () => {
+  installRequestUrl(async () => {
     calls += 1;
     throw new TypeError("fetch failed");
   });
@@ -69,7 +69,7 @@ test("syncCheck surfaces the last error after retries are exhausted", async () =
 test("commit never retries", async () => {
   const { WorkerClient } = await loadWorkerClient();
   let calls = 0;
-  installFetch(async () => {
+  installRequestUrl(async () => {
     calls += 1;
     throw new TypeError("fetch failed");
   });
@@ -83,6 +83,37 @@ test("commit never retries", async () => {
     blobs: []
   }), /fetch failed/);
   assert.equal(calls, 1);
+});
+
+test("syncCheck sends authenticated JSON through Obsidian requestUrl", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  let request;
+  installRequestUrl(async (input) => {
+    request = input;
+    return jsonRequestResponse({ protocol: 2, remoteCommitSha: "abc" });
+  });
+
+  const client = new WorkerClient(testSettings(), []);
+  await client.syncCheck("device", "base", { "note.md": { size: 4, sha256: "hash" } });
+
+  assert.equal(request.url, "https://worker.test/v2/sync/check");
+  assert.equal(request.method, "POST");
+  assert.equal(request.headers.authorization, "Bearer sync-token");
+  assert.equal(request.headers["content-type"], "application/json");
+  assert.equal(request.throw, false);
+  assert.deepEqual(JSON.parse(request.body), {
+    deviceId: "device",
+    lastSyncedCommitSha: "base",
+    files: { "note.md": { size: 4, sha256: "hash" } }
+  });
+});
+
+test("syncCheck times out stalled requestUrl calls", async () => {
+  const { WorkerClient } = await loadWorkerClient();
+  installRequestUrl(() => new Promise(() => {}));
+
+  const client = new WorkerClient(testSettings(), [], 5);
+  await assert.rejects(() => client.syncCheck("device", null, {}), /timed out/);
 });
 
 let workerClientModulePromise = null;
@@ -111,6 +142,7 @@ async function buildWorkerClientModule() {
     "}",
     "export class Notice { constructor() {} }",
     "export const Platform = { isDesktopApp: false };",
+    "export function requestUrl(input) { return globalThis.__vaultbridgeRequestUrl(input); }",
     "export function normalizePath(input) { return input.split('/').filter(Boolean).join('/'); }"
   ].join("\n"));
 
@@ -138,20 +170,21 @@ async function buildWorkerClientModule() {
   return await import(pathToFileURL(path.join(outdir, "workerClient.js")).href);
 }
 
-function installFetch(handler) {
-  const original = globalThis.fetch;
-  globalThis.fetch = handler;
+function installRequestUrl(handler) {
+  const original = globalThis.__vaultbridgeRequestUrl;
+  globalThis.__vaultbridgeRequestUrl = handler;
   test.after(() => {
-    globalThis.fetch = original;
+    globalThis.__vaultbridgeRequestUrl = original;
   });
 }
 
-function jsonResponse(body, status = 200) {
+function jsonRequestResponse(body, status = 200) {
   return {
     status,
-    async text() {
-      return JSON.stringify(body);
-    }
+    headers: {},
+    arrayBuffer: new ArrayBuffer(0),
+    json: body,
+    text: JSON.stringify(body)
   };
 }
 

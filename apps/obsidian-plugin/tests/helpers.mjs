@@ -27,6 +27,7 @@ export async function buildTestModules() {
     "}",
     "export class Notice { constructor(message, timeout) { globalThis.__vaultbridgeNotices = globalThis.__vaultbridgeNotices || []; globalThis.__vaultbridgeNotices.push({ message, timeout }); } }",
     "export const Platform = { isDesktopApp: false };",
+    "export function requestUrl(input) { return globalThis.__vaultbridgeRequestUrl(input); }",
     "export function normalizePath(input) { return input.split('/').filter(Boolean).join('/'); }"
   ].join("\n"));
 
@@ -137,26 +138,27 @@ export class MemoryVault {
 export function installSyncFetch({ plans, remoteFiles, modelResult, modelStatus = 200 }) {
   let syncCheckCalls = 0;
   const log = { blobCalls: 0, commitCalls: 0, modelCalls: 0 };
-  installFetch(async (url, init) => {
+  installRequestUrl(async (init) => {
+    const url = init.url;
     const body = init.body ? JSON.parse(init.body) : {};
     if (url === "https://worker.test/v2/sync/check") {
       const plan = plans[syncCheckCalls];
       syncCheckCalls += 1;
       if (!plan) throw new Error("Unexpected extra sync/check call");
-      return jsonResponse(plan);
+      return jsonRequestResponse(plan);
     }
     if (url === "https://worker.test/v2/pull/file") {
       const text = remoteFiles[body.path];
       if (typeof text !== "string") throw new Error(`Missing remote file for ${body.path}`);
-      return jsonResponse(pullFileResponse(body.path, body.blobSha, text));
+      return jsonRequestResponse(pullFileResponse(body.path, body.blobSha, text));
     }
     if (url === "https://worker.test/v2/blob") {
       log.blobCalls += 1;
-      return jsonResponse({ path: body.path, sha: "created-blob" });
+      return jsonRequestResponse({ path: body.path, sha: "created-blob" });
     }
     if (url === "https://worker.test/v2/commit") {
       log.commitCalls += 1;
-      return jsonResponse({
+      return jsonRequestResponse({
         ok: true,
         protocol: 2,
         commitSha: "commit-1",
@@ -165,6 +167,9 @@ export function installSyncFetch({ plans, remoteFiles, modelResult, modelStatus 
         deviceState: { version: 2, deviceId: body.deviceId, lastSyncedCommitSha: "commit-1" }
       });
     }
+    throw new Error(`Unexpected requestUrl URL: ${url}`);
+  });
+  installFetch(async (url) => {
     if (url === "https://api.deepseek.com/chat/completions") {
       log.modelCalls += 1;
       if (modelStatus !== 200) return jsonResponse({ error: "model unavailable" }, modelStatus);
@@ -173,6 +178,10 @@ export function installSyncFetch({ plans, remoteFiles, modelResult, modelStatus 
     throw new Error(`Unexpected fetch URL: ${url}`);
   });
   return log;
+}
+
+export function installRequestUrl(handler) {
+  globalThis.__vaultbridgeRequestUrl = async (input) => handler(input);
 }
 
 export function installFetch(handler) {
@@ -188,6 +197,17 @@ export function jsonResponse(body, status = 200) {
   return {
     status,
     text: async () => JSON.stringify(body)
+  };
+}
+
+export function jsonRequestResponse(body, status = 200) {
+  const text = JSON.stringify(body);
+  return {
+    status,
+    headers: {},
+    arrayBuffer: new TextEncoder().encode(text).buffer,
+    json: body,
+    text
   };
 }
 
