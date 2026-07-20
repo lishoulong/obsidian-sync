@@ -286,9 +286,8 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Worker URL")
-        .setDesc("Paste the deployed Cloudflare Worker URL for this sync service.")
         .addText((text) => text
-          .setPlaceholder("https://vaultbridge.example.workers.dev")
+          .setPlaceholder("https://vaultbridge.example.com")
           .setValue(settings.workerUrl)
           .onChange(async (value) => {
             settings.workerUrl = normalizeWorkerUrl(value);
@@ -296,12 +295,11 @@ export class VaultBridgeSettingTab extends PluginSettingTab {
           }));
 
       new Setting(containerEl)
-        .setName("Worker access token")
-        .setDesc("The first managing device uses the administrator SYNC_TOKEN. Devices connected by QR code receive their own revocable device token automatically.")
+        .setName("SYNC_TOKEN")
         .addText((text) => {
           text.inputEl.type = "password";
           text
-            .setPlaceholder("Administrator or device token")
+            .setPlaceholder("SYNC_TOKEN")
             .setValue(settings.syncToken)
             .onChange(async (value) => {
               settings.syncToken = value.trim();
